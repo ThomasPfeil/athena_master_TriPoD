@@ -75,7 +75,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
   int il, iu, jl, ju, kl, ku;
   int is = pmb->is; int js = pmb->js; int ks = pmb->ks;
   int ie = pmb->ie; int je = pmb->je; int ke = pmb->ke;
-  Real nu_face, rho_face, dprim_r_dx, dprim_r_dy, dprim_r_dz;
+  Real nu_face, rho_face, rhod_face, pr_face, inv_OmK, dprim_r_dx, dprim_r_dy, dprim_r_dz;
 
   // i-direction
   jl = js, ju = je, kl = ks, ku = ke;
@@ -95,8 +95,13 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
           nu_face = nu_scalar_iso;
           // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k,j,i-1));
           rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
+          int idf = (n==1) ? 0 : 4;
+          rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j,i-1));
+          pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
+          inv_OmK = std::pow(pco->x1f(i), 1.5);
+          nu_face *= pr_face/rho_face * inv_OmK; 
           dprim_r_dx = (prim_r(n,k,j,i) - prim_r(n,k,j,i-1))/pco->dx1v(i-1);
-          x1flux(n,k,j,i) -= nu_face*rho_face*dprim_r_dx;
+          x1flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dx;
         }
       }
     }
@@ -120,8 +125,13 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
             nu_face = nu_scalar_iso;
             // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k,j-1,i));
             rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j-1,i));
+            int idf = (n==1) ? 0 : 4;
+            rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j-1,i));
+            pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k,j-1,i));
+            inv_OmK = std::pow(pco->x1v(i), 1.5);
+            nu_face *= pr_face/rho_face * inv_OmK; 
             dprim_r_dy = (prim_r(n,k,j,i) - prim_r(n,k,j-1,i))/pco->h2v(i)/pco->dx2v(j-1);
-            x2flux(n,k,j,i) -= nu_face*rho_face*dprim_r_dy;
+            x2flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dy;
           }
         }
       }
@@ -146,9 +156,14 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
             nu_face = nu_scalar_iso;
             // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k-1,j,i));
             rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k-1,j,i));
+            int idf = (n==1) ? 0 : 4;
+            rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k-1,j,i));
+            pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k-1,j,i));
+            inv_OmK = std::pow(pco->x1v(i), 1.5);
+            nu_face *= pr_face/rho_face * inv_OmK; 
             dprim_r_dz = (prim_r(n,k,j,i) - prim_r(n,k-1,j,i))/pco->dx3v(k-1)/pco->h31v(i)
                          /pco->h32v(j);
-            x3flux(n,k,j,i) -= nu_face*rho_face*dprim_r_dz;
+            x3flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dz;
           }
         }
       }
@@ -166,6 +181,7 @@ Real PassiveScalars::NewDiffusionDt() {
   MeshBlock *pmb = pmy_block;
   const bool f2 = pmb->pmy_mesh->f2;
   const bool f3 = pmb->pmy_mesh->f3;
+  AthenaArray<Real> &w = pmb->phydro->w;
   int il = pmb->is - NGHOST; int jl = pmb->js; int kl = pmb->ks;
   int iu = pmb->ie + NGHOST; int ju = pmb->je; int ku = pmb->ke;
   Real fac;
@@ -181,37 +197,45 @@ Real PassiveScalars::NewDiffusionDt() {
   // for passive scalars:
   // AthenaArray<Real> &nu_scalar_t = nu_scalar_tot_;
   AthenaArray<Real> &len = dx1_, &dx2 = dx2_, &dx3 = dx3_;
+  Real rho_face, pr_face, inv_OmK, nu_face;
 
-  for (int k=kl; k<=ku; ++k) {
-    for (int j=jl; j<=ju; ++j) {
-      // #pragma omp simd
-//       for (int i=il; i<=iu; ++i) {
-//         nu_scalar_t(i) = 0.0;
-//       }
-//       if (nu_scalar_iso > 0.0) {
-// #pragma omp simd
-//         for (int i=il; i<=iu; ++i) nu_scalar_t(i) += nu(DiffProcess::iso,k,j,i);
-//       }
-//       if (nu_scalar_aniso > 0.0) {
-// #pragma omp simd
-//         for (int i=il; i<=iu; ++i) nu_scalar_t(i) += nu(DiffProcess::aniso,k,j,i);
-//       }
-      pmb->pcoord->CenterWidth1(k, j, il, iu, len);
-      pmb->pcoord->CenterWidth2(k, j, il, iu, dx2);
-      pmb->pcoord->CenterWidth3(k, j, il, iu, dx3);
+  for (int n=0; n<NSCALARS; ++n) {
+		for (int k=kl; k<=ku; ++k) {
+			for (int j=jl; j<=ju; ++j) {
+				// #pragma omp simd
+	//       for (int i=il; i<=iu; ++i) {
+	//         nu_scalar_t(i) = 0.0;
+	//       }
+	//       if (nu_scalar_iso > 0.0) {
+	// #pragma omp simd
+	//         for (int i=il; i<=iu; ++i) nu_scalar_t(i) += nu(DiffProcess::iso,k,j,i);
+	//       }
+	//       if (nu_scalar_aniso > 0.0) {
+	// #pragma omp simd
+	//         for (int i=il; i<=iu; ++i) nu_scalar_t(i) += nu(DiffProcess::aniso,k,j,i);
+	//       }
+				pmb->pcoord->CenterWidth1(k, j, il, iu, len);
+				pmb->pcoord->CenterWidth2(k, j, il, iu, dx2);
+				pmb->pcoord->CenterWidth3(k, j, il, iu, dx3);
 #pragma omp simd
-      for (int i=il; i<=iu; ++i) {
-        len(i) = (f2) ? std::min(len(i), dx2(i)) : len(i);
-        len(i) = (f3) ? std::min(len(i), dx3(i)) : len(i);
-      }
-      if (nu_scalar_iso > 0.0) { // || (nu_scalar_aniso > 0.0)) {
-        for (int i=il; i<=iu; ++i) {
-          dt_diff = std::min(dt_diff, static_cast<Real>(
-              SQR(len(i))*fac/(nu_scalar_iso + TINY_NUMBER)));
-              // /(nu_scalar_t(i) + TINY_NUMBER)));
-        }
-      }
-    }
-  }
+				for (int i=il; i<=iu; ++i) {
+					len(i) = (f2) ? std::min(len(i), dx2(i)) : len(i);
+					len(i) = (f3) ? std::min(len(i), dx3(i)) : len(i);
+				}
+				if (nu_scalar_iso > 0.0) { // || (nu_scalar_aniso > 0.0)) {
+					for (int i=il; i<=iu; ++i) {
+            nu_face  = nu_scalar_iso;
+            rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
+            pr_face  = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
+            inv_OmK  = std::pow(pmb->pcoord->x1f(i), 1.5);
+            nu_face  *= pr_face/rho_face * inv_OmK; 
+						dt_diff  = std::min(dt_diff, static_cast<Real>(
+								SQR(len(i))*fac/(nu_face + TINY_NUMBER)));
+								// /(nu_scalar_t(i) + TINY_NUMBER)));
+					}
+				}
+			}
+		}
+	}
   return dt_diff;
 }
