@@ -36,6 +36,7 @@
 #include "../scalars/scalars.hpp"
 
 namespace {
+
 void GetCylCoord(Coordinates *pco,Real &rad,Real &phi,Real &z,int i,int j,int k);
 Real DenProfileCyl(const Real rad, const Real phi, const Real z);
 Real DenProfileCyl_dust(const Real rad, const Real phi, const Real z, const Real St, const Real eps);
@@ -45,10 +46,10 @@ Real Stokes(Real size, Real rhog, Real cs, Real OmK);
 Real log_size(int n, Real amax, Real amin);
 Real mean_size(int n, Real amax, Real amin, Real qd);
 Real eps_bin(int n, Real amax, Real amin, Real eps_ini, Real q_d);
-Real amax_growth(Real R, Real phi, Real z, Real time);
+Real amax_growth(Real rad, Real cs, Real eps, Real time);
       
 // problem parameters which are useful to make global to this file
-Real gm0, ms, mdisk, r0, h_au, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, rho_m, delta_ini, v_frag, g, alpha_gas;
+Real gm0, ms, mdisk, r0, h_au, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, rho_m, delta_ini, v_frag, g, alpha_gas, eps_floor;
 bool beta_cool, dust_cool, ther_rel, isotherm, growth, damping;
 Real dfloor, dffloor;
 Real Omega0;
@@ -100,7 +101,6 @@ AthenaArray<Real> amax_arr;
 //========================================================================================
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
-
   // Get switches for different physics
   ther_rel  = pin->GetBoolean("problem","therm_relax");
   beta_cool = pin->GetBoolean("problem","beta_cool");
@@ -137,6 +137,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   rho_m     = pin->GetReal("problem","dust_rho_m");
   delta_ini = pin->GetReal("problem","dust_d_ini");
   v_frag    = pin->GetReal("problem","dust_v_frag");
+  eps_floor = pin->GetReal("problem","eps_floor");
   alpha_gas = pin->GetReal("problem","alpha_gas");
   g         = pin->GetReal("hydro","gamma");
 
@@ -191,9 +192,93 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 }
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
-  t_relax.NewAthenaArray(ncells3,ncells2,ncells1);
-  amax_arr.NewAthenaArray(ncells3,ncells2,ncells1);
-  AllocateUserOutputVariables(2);
+  // User-defined output variables
+  AllocateUserOutputVariables(10);
+
+  // Store initial condition and maximum particle size for internal use
+  AllocateRealUserMeshBlockDataField(6+NDUSTFLUIDS); // rhog, cs, vphi, amax, rhod_i, eps_tot, trelax
+  Real orb_defined;
+  (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
+  OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
+  int dk = NGHOST;
+  if (block_size.nx3 == 1) dk = 0;
+
+  // Store initial condition in meshblock data -> avoid recalculation at later stages/in boundary conditions 
+  // Initial condition is axisymmetric -> 2D arrays
+  ruser_meshblock_data[0].NewAthenaArray(block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // gas density
+  ruser_meshblock_data[1].NewAthenaArray(block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // soundspeed
+  ruser_meshblock_data[2].NewAthenaArray(block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // azimuthal velocity
+  if (NDUSTFLUIDS > 0) {
+    for(int n=0; n<NDUSTFLUIDS+3; ++n){
+      ruser_meshblock_data[3+n].NewAthenaArray(block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // amax and initial epsilon
+    }
+  }
+
+  Real den, cs, vg_phi;
+  Real amean, St_mid, OmK, eps, den_dust, den_mid;
+  for (int j=js-NGHOST; j<=je+NGHOST; ++j) {
+    Real x2 = pcoord->x2v(j);
+  #pragma omp simd
+    for (int i=is-NGHOST; i<=ie+NGHOST; ++i) {
+      Real x1 = pcoord->x1v(i);
+
+      // Calculate initial condition
+      Real rad, phi, z;
+      GetCylCoord(pcoord,rad,phi,z,i,j,0);
+      den    = DenProfileCyl(rad,phi,z);
+      cs     = SspeedProfileCyl(rad, phi, z);
+      vg_phi = VelProfileCyl(rad,phi,z);
+      if (porb->orbital_advection_defined)
+        vg_phi -= vK(porb, x1, x2, 0);
+
+      // Assign ruser_meshblock_data 0-2
+      ruser_meshblock_data[0](j, i) = den;
+      ruser_meshblock_data[1](j, i) = cs;
+      ruser_meshblock_data[2](j, i) = vg_phi;
+
+      if (NDUSTFLUIDS > 0) {
+        ruser_meshblock_data[3](j, i) = amax_growth(rad, ruser_meshblock_data[1](j, i)*unit_vel, eps, pmy_mesh->time); //a_max; // initialize maximum particle size
+
+        Real a0,a1,am,as,ns,qp1,qp3,qp4,chi,xi,nd,sig_s,tcool,rhod_tot;
+        Real as_num   = 0.0; // initialize numerator of Sauter mean
+        Real as_denom = 0.0; // initialize denominator of Sauter mean
+        rhod_tot = 0.0;
+        for (int n=0; n<NDUSTFLUIDS; ++n) {
+          // --------------------------------------------------------------------------------------------
+          // Calculate equilibrium dust density based on Fromang & Nelson (2009), given delta_ini
+          // --------------------------------------------------------------------------------------------
+          amean   = mean_size(n, a_max, a_min, q_dust);        // particle size of the bin
+          eps     = eps_bin(n, a_max, a_min, eps_ini, q_dust); // dust to gas ratio of the bin 
+          OmK     = std::pow(rad, -1.5);                       // Keplerian frequency
+          den_mid = DenProfileCyl(rad,phi,0.);                 // midplane gas density
+          St_mid  = Stokes(amean, den_mid, cs, OmK);           // midplane Stokes number
+          den_dust= DenProfileCyl_dust(rad,phi,z,St_mid,eps);  // dust density based on Fromang & Nelson
+          rhod_tot += den_dust; // sum up dust densities
+          
+          int rho_id  = 4+n;
+          ruser_meshblock_data[rho_id](j, i) = den_dust;
+
+          a0   = log_size(n,   a_max, a_min);   
+          a1   = log_size(n+1, a_max, a_min);
+          am   = mean_size(n,  a_max, a_min, q_dust);
+          nd   = den_dust*unit_rho / (4./3.*PI*rho_m*std::pow(am, 3.0));
+          qp1  = q_dust+1.; 
+          qp3  = q_dust+3.;
+          qp4  = q_dust+4.;
+          chi  = qp1/qp4 * (std::pow(a1,qp4)-std::pow(a0,qp4)) / (std::pow(a1,qp1)-std::pow(a0,qp1));
+          xi   = qp1/qp3 * (std::pow(a1,qp3)-std::pow(a0,qp3)) / (std::pow(a1,qp1)-std::pow(a0,qp1));
+          as_num   += chi*nd;
+          as_denom += xi*nd;
+        }
+        as    = as_num/as_denom; // Sauter mean radius 
+        sig_s = PI*SQR(as);      // Sauter mean radius collision cross section
+        ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
+        tcool = std::min(50., std::sqrt(PI/8.) * g/(g-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+        ruser_meshblock_data[3+NDUSTFLUIDS+1](j, i) = rhod_tot/ruser_meshblock_data[0](j, i); // divide by density
+        ruser_meshblock_data[3+NDUSTFLUIDS+2](j, i) = tcool; 
+      }
+    }
+	}
   return;
 }
 
@@ -228,7 +313,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         x1 = pcoord->x1v(i);
         GetCylCoord(pcoord,rad,phi,z,i,j,k); // convert to cylindrical coordinates
         
-        // compute initial conditions in cylindrical coordinates
+        // compute initial conditions in cylindrical coordinates    
         den    = DenProfileCyl(rad,phi,z);
         cs     = SspeedProfileCyl(rad, phi, z);
         vg_phi = VelProfileCyl(rad,phi,z);
@@ -326,15 +411,18 @@ Real DenProfileCyl(const Real rad, const Real phi, const Real z) {
 //----------------------------------------------------------------------------------------
 //! Computes density in cylindrical coordinates (following Lynden-Bell & Pringle, 1974)
 Real DenProfileCyl_dust(const Real rad, const Real phi, const Real z, Real St, Real eps) {
-  Real den,cs,h,Hd,Sig,rhod_mid;
+  Real den,cs,h,Hd,Sig,rhod_mid,den_g,eps_;
   cs  = SspeedProfileCyl(rad, phi, z);                                      // speed of sound
   h   = cs * std::pow(rad,1.5);                                             // pressure scale height
   Hd  = h * std::sqrt(delta_ini/(St+delta_ini)) * unit_len;
   Sig = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+  den_g = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
+        * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));    // vertical structure
   rhod_mid = eps*Sig / (std::sqrt(2.*PI) * Hd) / unit_rho;
   // den = rhod_mid * std::exp(SQR(rad*unit_len/Hd) * (rad / std::sqrt(SQR(rad)+SQR(z)) - 1.0)); // const St solution
   den = rhod_mid * std::exp(-St/delta_ini*(std::exp(0.5*SQR(z/h)) - 1.) - 0.5*SQR(z/h)); // constant amax solution
-  return std::max(dffloor, den);
+  eps_ = den/den_g;
+  return std::sqrt(SQR(eps_floor) + SQR(eps_)) * den_g;
 }
 
 //----------------------------------------------------------------------------------------
@@ -396,53 +484,48 @@ Real eps_bin(int n, Real amax, Real amin, Real epstot, Real qd){
 
 //----------------------------------------------------------------------------------------
 //! Computes the particle size, growing toward the frag./drift-frag. limit.
-Real amax_growth(Real rad, Real phi, Real z, Real time){
-  Real gamma, csiso, vK, Sigma, afr, adrfr, amax, rc2pSig, sqrt2pi;
+Real amax_growth(Real rad, Real cs, Real eps, Real time){
+  Real gamma, vK, Sigma, afr, adrfr, amax, rc2pSig, sqrt2pi;
   sqrt2pi  = std::sqrt(2.*PI);
   rc2pSig  = std::pow(rad/rc, 2.0+pSig);
   gamma    = std::fabs(prho+q-(2.0+pSig)*rc2pSig);
-  csiso    = hr_r0 * std::pow(rad, 0.5*q) * unit_vel; 
   vK       = std::pow(rad, -0.5) * unit_vel;
   Sigma    = unit_sig * std::pow(rad/rc,pSig) * std::exp(-rc2pSig);
 
-  afr   = 2./(3.*PI) * Sigma/(rho_m*delta_ini) * std::pow(v_frag/csiso, 2.0);
-  adrfr = 4*v_frag*vK*Sigma/(PI*rho_m*gamma*csiso*csiso);
+  afr   = 2./(3.*PI) * Sigma/(rho_m*delta_ini) * std::pow(v_frag/cs, 2.0);
+  adrfr = 4*v_frag*vK*Sigma/(PI*rho_m*gamma*cs*cs);
   amax  = std::min(adrfr, afr);
 
-  // Real tgr   = 1./(std::pow(rad,-1.5)*eps_ini);
-  Real eps, amean, St_mid, den_dust, den, den_mid, Hd, rhod_mid, h, zh2, ezh2;
-  h        = csiso/vK * rad;
-  zh2      = 0.5*SQR(z/h);
-  ezh2     = std::exp(zh2);
-  den_dust = 0.0;
-  den_mid  = Sigma/(sqrt2pi*h*unit_len);
-  den      = den_mid * std::exp(SQR(vK/csiso) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));
-  for(int n=0; n<NDUSTFLUIDS; ++n){
-    eps       = eps_bin(n, a_max, a_min, eps_ini, q_dust);
-    amean     = mean_size(n, a_max, a_min, q_dust);
-    St_mid    = Stokes(amean, den_mid, csiso/unit_vel, vK/unit_vel/rad);
-    Hd        = h * std::sqrt(delta_ini/(St_mid+delta_ini)) * unit_len;
-    rhod_mid  = eps*Sigma / (sqrt2pi * Hd) / unit_rho;
-    den_dust += den_mid * std::exp(-St_mid/delta_ini*(ezh2- 1.) - zh2); 
-  }
-  eps = den_dust/den;
+  // // Real tgr   = 1./(std::pow(rad,-1.5)*eps_ini);
+  // Real eps, amean, St_mid, den_dust, den, den_mid, Hd, rhod_mid, h, zh2, ezh2;
+  // h        = csiso/vK * rad;
+  // zh2      = 0.5*SQR(z/h);
+  // ezh2     = std::exp(zh2);
+  // den_dust = 0.0;
+  // den_mid  = Sigma/(sqrt2pi*h*unit_len);
+  // den      = den_mid * std::exp(SQR(vK/csiso) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));
+  // for(int n=0; n<NDUSTFLUIDS; ++n){
+  //   eps       = eps_bin(n, a_max, a_min, eps_ini, q_dust);
+  //   amean     = mean_size(n, a_max, a_min, q_dust);
+  //   St_mid    = Stokes(amean, den_mid, csiso/unit_vel, vK/unit_vel/rad);
+  //   Hd        = h * std::sqrt(delta_ini/(St_mid+delta_ini)) * unit_len;
+  //   rhod_mid  = eps*Sigma / (sqrt2pi * Hd) / unit_rho;
+  //   den_dust += den_mid * std::exp(-St_mid/delta_ini*(ezh2- 1.) - zh2); 
+  // }
+  // eps = den_dust/den;
   Real tgr   = 1./(std::pow(rad,-1.5)*eps);
   
   Real a_ini = a_max;
   return a_ini*std::exp(time/tgr)/(1+a_ini/amax*(std::exp(time/tgr)-1));
 }
 
-Real tcool_dust(int i,int j,int k, const Real time, Hydro *hyd, Coordinates *pco, DustFluids *dst){
+Real tcool_dust(int i,int j,int k, const Real time, const Real amax, Hydro *hyd, Coordinates *pco, DustFluids *dst){
   int rho_id;
-  Real a0,a1,am,as,ns,qp1,qp3,qp4,chi,xi,nd,sig_s,amax,cs,rad,phi,z,rhod,tcool;
+  Real a0,a1,am,as,ns,qp1,qp3,qp4,chi,xi,nd,sig_s,cs,rad,phi,z,rhod,tcool;
   Real as_num   = 0.0; // initialize numerator of Sauter mean
   Real as_denom = 0.0; // initialize denominator of Sauter mean
   Real rhod_tot = 0.0; // initialize total dust density
   GetCylCoord(pco,rad,phi,z,i,j,k);
-  if(growth)
-    amax = amax_growth(rad,phi,z, time);
-  else
-    amax = a_max;
 
   for (int n=0; n<NDUSTFLUIDS; ++n) {    // Calculate the Sauter mean radius of the distribution
     rho_id = 4*n;
@@ -483,10 +566,7 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
           pr    = prim(IPR,k,j,i);
           OmK   = std::pow(rad, -1.5);
           cs    = std::sqrt(pr/rho);
-          if(growth)
-            amax = amax_growth(rad,phi,z, time);
-          else
-            amax = a_max;
+          amax  = pmb->ruser_meshblock_data[3](j, i);
           a_av  = mean_size(n, amax, a_min, q_dust);
           St    = Stokes(a_av, rho, cs, OmK);
 
@@ -543,10 +623,7 @@ void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
             pr    = w(IPR, k, j, i);
             OmK   = std::pow(rad, -1.5);
             cs    = std::sqrt(pr/rho);
-            if(growth)
-              amax = amax_growth(rad,phi,z, pmb->pmy_mesh->time);
-            else
-              amax = a_max;
+            amax  = pmb->ruser_meshblock_data[3](j, i);
             a_av  = mean_size(n, amax, a_min, q_dust);
             St    = Stokes(a_av, rho, cs, OmK);
             
@@ -611,7 +688,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           //--------------------------------------------------------------------------------------
           //! Use collisional dust cooling (see Pfeil et al., 2024a)
           else if(dust_cool){
-            tcool = tcool_dust(i, j, k, time, pmb->phydro, pmb->pcoord, pmb->pdustfluids);
+            tcool = pmb->ruser_meshblock_data[3+NDUSTFLUIDS+2](j, i);
           }
 
           //--------------------------------------------------------------------------------------
@@ -641,8 +718,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           GetCylCoord(pmb->pcoord,rad,phi,z,i,j,k); 
           OmK     = std::pow(rad, -1.5);    
           den_mid = DenProfileCyl(rad,phi,0.);
-          cs      = SspeedProfileCyl(rad,phi,z);      
-          vphi    = VelProfileCyl(rad,phi,z);
+          den  = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
+          cs   = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
+          vphi = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vphi -= vK(pmb->porb, pmb->pcoord->x1v(i), pmb-> pcoord->x2v(j), pmb->pcoord->x3v(k));
 
@@ -654,10 +732,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           for (int n=0; n<NDUSTFLUIDS; ++n) {
             // --------------------------------------------------------------------------------------------
             // Calculate equilibrium dust density based on Fromang & Nelson (2009), given delta_ini
-            if(growth)
-              amax = amax_growth(rad,phi,z, pmb->pmy_mesh->time);
-            else
-              amax = a_max;
+            amax    = 
             amean   = mean_size(n, amax, a_min, q_dust);        // particle size of the bin
             eps     = eps_bin(n, amax, a_min, eps_ini, q_dust); // dust to gas ratio of the bin 
             St_mid  = Stokes(amean, den_mid, cs, OmK);           // midplane Stokes number
@@ -668,10 +743,10 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            cons_df(rho_id,k,j,i) -= (1.-dampterm) * (cons_df(rho_id,k,j,i) - den_dust);
+            // cons_df(rho_id,k,j,i) -= (1.-dampterm) * (cons_df(rho_id,k,j,i) - den_dust);
             cons_df(v1_id,k,j,i)  -= (1.-dampterm) * (cons_df(v1_id, k,j,i));
             cons_df(v2_id,k,j,i)  -= (1.-dampterm) * (cons_df(v2_id, k,j,i));
-            cons_df(v3_id,k,j,i)  -= (1.-dampterm) * (cons_df(v3_id, k,j,i) - den_dust*vphi);
+            cons_df(v3_id,k,j,i)  -= (1.-dampterm) * (cons_df(v3_id, k,j,i) - den_dust*cons_df(rho_id,k,j,i));
           }
         }
       }
@@ -694,9 +769,9 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=jl; j<=ju; ++j) {
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,il-i,j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad,phi,z);
-          vel = VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(il-i), pco->x2v(j), pco->x3v(k));
           prim(IM1,k,j,il-i) = 0.0; //- prim(IM1,k,j,il+i-1); 
@@ -776,9 +851,9 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=jl; j<=ju; ++j) {
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,iu+i,j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad,phi,z);
-          vel = VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(iu+i), pco->x2v(j), pco->x3v(k));
           prim(IM1,k,j,iu+i) = 0.0; //- prim(IM1,k,j,iu-i+1);
@@ -851,9 +926,9 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=1; j<=ngh; ++j) {
         for (int i=il; i<=iu; ++i) {
           GetCylCoord(pco,rad,phi,z,i,jl-j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad,phi,z);
-          vel = VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(jl-j), pco->x3v(k));
           prim(IM1,k,jl-j,i) = prim(IM1,k,jl+j-1,i); 
@@ -900,7 +975,7 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
               v1_id   = rho_id + 1;
               v2_id   = rho_id + 2;
               v3_id   = rho_id + 3;
-              prim_df(rho_id,k,jl-j,i) = prim_df(rho_id,k,jl+j-1,i); //den_dust;
+              prim_df(rho_id,k,jl-j,i) = 0.0; //den_dust;
               prim_df(v1_id, k,jl-j,i) = prim_df(v1_id, k,jl+j-1,i); //den_dust>dffloor ? prim(IM1,k,jl-j,i) + dv_r * std::sin(pco->x2v(jl-j)) : 0.0;
               prim_df(v2_id, k,jl-j,i) = -prim_df(v2_id, k,jl+j-1,i); //den_dust>dffloor ? prim(IM2,k,jl-j,i) + dv_r * std::cos(pco->x2v(jl-j)) : 0.0;
               prim_df(v3_id, k,jl-j,i) = vel; //den_dust>dffloor ? prim(IM3,k,jl-j,i) + dv_phi : 0.0;
@@ -931,9 +1006,9 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=1; j<=ngh; ++j) {
         for (int i=il; i<=iu; ++i) {
           GetCylCoord(pco,rad,phi,z,i,ju+j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad,phi,z);
-          vel = VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(ju+j), pco->x3v(k));
           prim(IM1,k,ju+j,i) =  prim(IM1,k,ju-j+1,i); 
@@ -980,7 +1055,7 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
               v1_id   = rho_id + 1;
               v2_id   = rho_id + 2;
               v3_id   = rho_id + 3;
-              prim_df(rho_id,k,ju+j,i) = prim_df(rho_id,k,ju-j+1,i);
+              prim_df(rho_id,k,ju+j,i) = 0.0;
               prim_df(v1_id, k,ju+j,i) = prim_df(v1_id, k,ju-j+1,i); // + dv_r * std::sin(pco->x2v(ju+j)) : 0.0;
               prim_df(v2_id, k,ju+j,i) = -prim_df(v2_id, k,ju-j+1,i); // + dv_r * std::cos(pco->x2v(ju+j)) : 0.0;
               prim_df(v3_id, k,ju+j,i) = vel; //den_dust>dffloor ? prim(IM3,k,ju+j,i) + dv_phi : 0.0;
@@ -997,25 +1072,41 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
   }
 }
 
-void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin)
-{
+void MeshBlock::UserWorkInLoop() {
+  if(growth){
+    for (int j=js; j<=je; ++j) {
+      for (int i=is; i<=ie; ++i) {
+        Real rad,phi,z,eps;
+        GetCylCoord(pcoord, rad,phi,z, i,j,0); // don't need k, since axisymmetric
+        pmy_mesh->time;
+        eps = 0.;
+        for(int n=0; n<NDUSTFLUIDS; ++n){
+          eps += ruser_meshblock_data[4+n](j,i)/ruser_meshblock_data[0](j, i);
+        }
+        ruser_meshblock_data[3](j, i) = amax_growth(rad, ruser_meshblock_data[1](j, i)*unit_vel, eps, pmy_mesh->time);
+        ruser_meshblock_data[3+NDUSTFLUIDS+2](j, i) = tcool_dust(i, j, 0, pmy_mesh->time, ruser_meshblock_data[3](j, i), phydro, pcoord, pdustfluids);
+      }
+    }
+  }
+  return;
+}
+
+void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin ){
   Real rad,phi,z,trel;
   for(int k=ks; k<=ke; k++) {
     for(int j=js; j<=je; j++) {
       for(int i=is; i<=ie; i++) {
-        //! Determine max. particle size
         GetCylCoord(pcoord, rad,phi,z, i,j,k);
-        if(growth)
-          amax_arr(k,j,i) = amax_growth(rad,phi,z, pmy_mesh->time);
-        else
-          amax_arr(k,j,i) = a_max;
-        user_out_var(0,k,j,i) = amax_arr(k,j,i);
-
-        if(isotherm)
-          t_relax(k,j,i) = tcool_dust(i, j, k, pmy_mesh->time, phydro, pcoord, pdustfluids) * std::pow(rad,-1.5);
-        else
-          t_relax(k,j,i) = tcool_dust(i, j, k, pmy_mesh->time, phydro, pcoord, pdustfluids) * std::pow(rad,-1.5);
-        user_out_var(1,k,j,i) = t_relax(k,j,i);
+        user_out_var(0,k,j,i) = ruser_meshblock_data[0](j, i);
+        user_out_var(1,k,j,i) = ruser_meshblock_data[1](j, i);
+        user_out_var(2,k,j,i) = ruser_meshblock_data[2](j, i);
+        user_out_var(3,k,j,i) = ruser_meshblock_data[3](j, i);
+        user_out_var(4,k,j,i) = ruser_meshblock_data[4](j, i);
+        user_out_var(5,k,j,i) = ruser_meshblock_data[5](j, i);
+        user_out_var(6,k,j,i) = ruser_meshblock_data[6](j, i);
+        user_out_var(7,k,j,i) = ruser_meshblock_data[7](j, i);
+        user_out_var(8,k,j,i) = ruser_meshblock_data[8](j, i);
+        user_out_var(9,k,j,i) = ruser_meshblock_data[9](j, i) * std::pow(rad,-1.5);
       }
     }
   }
