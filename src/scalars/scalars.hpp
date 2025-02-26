@@ -101,7 +101,8 @@ class PassiveScalars {
   void ComputeUpwindFlux(const int k, const int j, const int il,
                          const int iu, // CoordinateDirection dir,
                          AthenaArray<Real> &rl, AthenaArray<Real> &rr,
-                         AthenaArray<Real> &mass_flx,
+                         AthenaArray<Real> &mass_flx_0,
+                         AthenaArray<Real> &mass_flx_1,
                          AthenaArray<Real> &flx_out);
   void AddDiffusionFluxes();
   // TODO(felker): dedpulicate these arrays and the same named ones in HydroDiffusion

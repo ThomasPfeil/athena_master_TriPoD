@@ -43,11 +43,15 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
 
 
 
-  Hydro &hyd = *(pmb->phydro);
+  // Hydro &hyd = *(pmb->phydro);
+  DustFluids &dst = *(pmb->pdustfluids);
 
   AthenaArray<Real> &x1flux = s_flux[X1DIR];
-  AthenaArray<Real> mass_flux;
-  mass_flux.InitWithShallowSlice(hyd.flux[X1DIR], 4, IDN, 1);
+  AthenaArray<Real> mass_flux_0;
+  AthenaArray<Real> mass_flux_1;
+  // mass_flux.InitWithShallowSlice(hyd.flux[X1DIR], 4, IDN, 1);
+  mass_flux_0.InitWithShallowSlice(dst.df_flux[X1DIR], 4, 0, 1);
+  mass_flux_1.InitWithShallowSlice(dst.df_flux[X1DIR], 4, 4, 1);
   int is = pmb->is; int js = pmb->js; int ks = pmb->ks;
   int ie = pmb->ie; int je = pmb->je; int ke = pmb->ke;
   int il, iu, jl, ju, kl, ku;
@@ -89,7 +93,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
         }
       }
 
-      ComputeUpwindFlux(k, j, is, ie+1, rl_, rr_, mass_flux, x1flux);
+      ComputeUpwindFlux(k, j, is, ie+1, rl_, rr_, mass_flux_0, mass_flux_1, x1flux);
 
       if (order == 4) {
         for (int n=0; n<NSCALARS; n++) {
@@ -128,7 +132,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
         }
 
         // Compute x1 interface fluxes from face-centered primitive variables
-        ComputeUpwindFlux(k, j, is, ie+1, rl_, rr_, mass_x1flux_fc, flux_fc);
+        ComputeUpwindFlux(k, j, is, ie+1, rl_, rr_, mass_x1flux_fc, mass_x1flux_fc, flux_fc);
 
         // Apply Laplacian of second-order accurate face-averaged flux on x1 faces
         for (int n=0; n<NSCALARS; ++n) {
@@ -148,7 +152,8 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
   if (pmb->pmy_mesh->f2) {
     AthenaArray<Real> &x2flux = s_flux[X2DIR];
     AthenaArray<Real> &mass_x2flux_fc = mass_flux_fc[X2DIR];
-    mass_flux.InitWithShallowSlice(hyd.flux[X2DIR], 4, IDN, 1);
+  mass_flux_0.InitWithShallowSlice(dst.df_flux[X2DIR], 4, 0, 1);
+  mass_flux_1.InitWithShallowSlice(dst.df_flux[X2DIR], 4, 4, 1);
 
     // set the loop limits
     il = is-1, iu = ie+1, kl = ks, ku = ke;
@@ -193,7 +198,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
           }
         }
 
-        ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_flux, x2flux);
+        ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_flux_0, mass_flux_1, x2flux);
 
         if (order == 4) {
           for (int n=0; n<NSCALARS; n++) {
@@ -235,7 +240,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
           }
 
           // Compute x2 interface fluxes from face-centered primitive variables
-          ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_x2flux_fc, flux_fc);
+          ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_x2flux_fc, mass_x2flux_fc, flux_fc);
 
           // Apply Laplacian of second-order accurate face-averaged flux on x1 faces
           for (int n=0; n<NSCALARS; ++n) {
@@ -254,7 +259,8 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
   if (pmb->pmy_mesh->f3) {
     AthenaArray<Real> &x3flux = s_flux[X3DIR];
     AthenaArray<Real> &mass_x3flux_fc = mass_flux_fc[X3DIR];
-    mass_flux.InitWithShallowSlice(hyd.flux[X3DIR], 4, IDN, 1);
+  mass_flux_0.InitWithShallowSlice(dst.df_flux[X3DIR], 4, 0, 1);
+  mass_flux_1.InitWithShallowSlice(dst.df_flux[X3DIR], 4, 4, 1);
 
     // set the loop limits
     // TODO(felker): fix loop limits for fourth-order hydro
@@ -294,7 +300,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
           }
         }
 
-        ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_flux, x3flux);
+        ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_flux_0, mass_flux_1, x3flux);
 
         if (order == 4) {
           for (int n=0; n<NSCALARS; n++) {
@@ -336,7 +342,7 @@ void PassiveScalars::CalculateFluxes(AthenaArray<Real> &r, const int order) {
           }
 
           // Compute x3 interface fluxes from face-centered primitive variables
-          ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_x3flux_fc, flux_fc);
+          ComputeUpwindFlux(k, j, il, iu, rl_, rr_, mass_x3flux_fc, mass_x3flux_fc, flux_fc);
 
           // Apply Laplacian of second-order accurate face-averaged flux on x3 faces
           for (int n=0; n<NSCALARS; ++n) {
@@ -364,14 +370,15 @@ void PassiveScalars::CalculateFluxes_STS() {
 void PassiveScalars::ComputeUpwindFlux(const int k, const int j, const int il,
                                        const int iu, // CoordinateDirection dir,
                                        AthenaArray<Real> &rl, AthenaArray<Real> &rr, // 2D
-                                       AthenaArray<Real> &mass_flx,  // 3D
+                                       AthenaArray<Real> &mass_flx_0,  // 3D
+                                       AthenaArray<Real> &mass_flx_1,  // 3D
                                        AthenaArray<Real> &flx_out) { // 4D
   const int nu = NSCALARS - 1;
 
   for (int n=0; n<=nu; n++) {
 #pragma omp simd
     for (int i=il; i<=iu; i++) {
-      Real fluid_flx = mass_flx(k,j,i);
+      Real fluid_flx = (n==1) ? mass_flx_0(k,j,i) : mass_flx_1(k,j,i);
       if (fluid_flx >= 0.0)
         flx_out(n,k,j,i) = fluid_flx*rl_(n,i);
       else
