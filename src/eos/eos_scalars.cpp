@@ -37,14 +37,17 @@ void EquationOfState::PassiveScalarConservedToPrimitive(
       for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
         for (int i=il; i<=iu; ++i) {
-          const Real &d  = u(IDN,k,j,i);
+          int idf = (n==1) ? 0 : 4;
+          const Real &d = u(idf,k,j,i);
 
           //for (int n=0; n<NSCALARS; ++n) {
           Real& s_n  = s(n,k,j,i);
           Real& r_n  = r(n,k,j,i);
           // apply passive scalars floor to conserved variable first, then transform:
           // (multi-D fluxes may have caused it to drop below floor)
-          s_n = (s_n < scalar_floor_ * d) ?  scalar_floor_ * d : s_n;
+          
+          Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+          s_n = (s_n < sfloor * d) ?  sfloor * d : s_n;
           r_n = s_n/d;
           // TODO(felker): continue to monitor the acceptability of this absolute 0. floor
           // (may create very large global conservation violations, e.g. the first few
@@ -139,7 +142,8 @@ void EquationOfState::PassiveScalarPrimitiveToConserved(
       for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
         for (int i=il; i<=iu; ++i) {
-          const Real &d  = u(IDN,k,j,i);
+          int idf = (n==1) ? 0 : 4;
+          const Real &d  = u(idf,k,j,i);
           //for (int n=0; n<NSCALARS; ++n) {
           Real& s_n  = s(n,k,j,i);
           const Real& r_n  = r(n,k,j,i);
@@ -169,7 +173,8 @@ void EquationOfState::ApplyPassiveScalarFloors(AthenaArray<Real> &r, int n, int 
     Real& r_n  = r(n,i);
     // apply (prim) dimensionless concentration floor WITHOUT adjusting passive scalar
     // mass (conserved), unlike in floor in standard EOS
-    r_n = (r_n > scalar_floor_) ?  r_n : scalar_floor_;
+    Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+    r_n = (r_n > sfloor) ?  r_n : sfloor;
   }
   return;
 }
@@ -180,12 +185,14 @@ void EquationOfState::ApplyPassiveScalarFloors(AthenaArray<Real> &r, int n, int 
 void EquationOfState::ApplyPassiveScalarPrimitiveConservedFloors(
     AthenaArray<Real> &s, const AthenaArray<Real> &w, AthenaArray<Real> &r,
     int n, int k, int j, int i) {
-  const Real &w_d  = w(IDN,k,j,i);
+  int idf = (n==1) ? 0 : 4;
+  const Real &w_d  = w(idf,k,j,i);
   const Real di = 1.0/w_d;
   Real& s_n  = s(n,k,j,i);
   Real& r_n  = r(n,k,j,i);
 
-  s_n = (s_n < scalar_floor_*w_d) ?  scalar_floor_*w_d : s_n;
+  Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+  s_n = (s_n < sfloor*w_d) ?  sfloor*w_d : s_n;
 
   // this next line, when applied indiscriminately, erases the accuracy gains performed in
   // the 4th order stencils, since <r> != <s>*<1/di>, in general
