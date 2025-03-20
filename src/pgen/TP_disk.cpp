@@ -769,9 +769,9 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=jl; j<=ju; ++j) {
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,il-i,j,k);
-          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
-          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
-          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, il-i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, il-i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, il-i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(il-i), pco->x2v(j), pco->x3v(k));
           prim(IM1,k,j,il-i) = 0.0; //- prim(IM1,k,j,il+i-1); 
@@ -851,9 +851,9 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=jl; j<=ju; ++j) {
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,iu+i,j,k);
-          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
-          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
-          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](j, iu+i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](j, iu+i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](j, iu+i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(iu+i), pco->x2v(j), pco->x3v(k));
           prim(IM1,k,j,iu+i) = 0.0; //- prim(IM1,k,j,iu-i+1);
@@ -926,9 +926,9 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=1; j<=ngh; ++j) {
         for (int i=il; i<=iu; ++i) {
           GetCylCoord(pco,rad,phi,z,i,jl-j,k);
-          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
-          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
-          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](jl-j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](jl-j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](jl-j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(jl-j), pco->x3v(k));
           prim(IM1,k,jl-j,i) = prim(IM1,k,jl+j-1,i); 
@@ -1006,9 +1006,9 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
       for (int j=1; j<=ngh; ++j) {
         for (int i=il; i<=iu; ++i) {
           GetCylCoord(pco,rad,phi,z,i,ju+j,k);
-          den = pmb->ruser_meshblock_data[0](j, i); //DenProfileCyl(rad,phi,z);
-          cs  = pmb->ruser_meshblock_data[1](j, i); //SspeedProfileCyl(rad,phi,z);
-          vel = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
+          den = pmb->ruser_meshblock_data[0](ju+j, i); //DenProfileCyl(rad,phi,z);
+          cs  = pmb->ruser_meshblock_data[1](ju+j, i); //SspeedProfileCyl(rad,phi,z);
+          vel = pmb->ruser_meshblock_data[2](ju+j, i); //VelProfileCyl(rad,phi,z);
           if (pmb->porb->orbital_advection_defined)
             vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(ju+j), pco->x3v(k));
           prim(IM1,k,ju+j,i) =  prim(IM1,k,ju-j+1,i); 
