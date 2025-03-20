@@ -63,7 +63,8 @@ class PassiveScalars {
   //! for now, not creating subfolder "scalars_diffusion/", nor class ScalarDiffusion
   //! that is would have an instance contained within PassiveScalars like HydroDiffusion
   //! approach. Consider creating an encapsulated class as these features are generalized.
-  Real nu_scalar_iso; //, nu_scalar_aniso;          // diffusion coeff
+  //Real nu_scalar_iso; //, nu_scalar_aniso;          // diffusion coeff
+  Real nu_scalar_iso[NSCALARS]; //, nu_scalar_aniso;          // diffusion coeff
   bool scalar_diffusion_defined;
   AthenaArray<Real> diffusion_flx[3];
   // AthenaArray<Real> nu_scalar;               // diffusion array

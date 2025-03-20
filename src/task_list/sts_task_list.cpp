@@ -868,6 +868,7 @@ TaskStatus SuperTimeStepTaskList::Prolongation_STS(MeshBlock *pmb,
 
 TaskStatus SuperTimeStepTaskList::Primitives_STS(MeshBlock *pmb, int stage) {
   Hydro *ph = pmb->phydro;
+  DustFluids *pdf = pmb->pdustfluids;
   Field *pf = pmb->pfield;
   PassiveScalars *ps = pmb->pscalars;
   BoundaryValues *pbval = pmb->pbval;
@@ -904,7 +905,7 @@ TaskStatus SuperTimeStepTaskList::Primitives_STS(MeshBlock *pmb, int stage) {
     }
 
     if (do_sts_scalar) {
-      pmb->peos->PassiveScalarConservedToPrimitive(ps->s, ph->w,
+      pmb->peos->PassiveScalarConservedToPrimitive(ps->s, pdf->df_cons,
                                                    ps->r, ps->r,
                                                    pmb->pcoord, il, iu, jl, ju, kl, ku);
     }

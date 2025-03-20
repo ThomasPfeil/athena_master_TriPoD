@@ -471,7 +471,7 @@ void BoundaryValues::ApplyPhysicalBoundariesOnCoarseLevel(
   }
   if (NSCALARS > 0) {
     PassiveScalars *ps = pmb->pscalars;
-    pmb->peos->PassiveScalarConservedToPrimitive(ps->coarse_s_, ph->coarse_cons_,
+    pmb->peos->PassiveScalarConservedToPrimitive(ps->coarse_s_, pdf->coarse_df_cons_,
                                                  ps->coarse_r_, ps->coarse_r_,
                                                  pmr->pcoarsec,
                                                  si-f1m, ei+f1p, sj-f2m, ej+f2p,

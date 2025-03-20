@@ -42,11 +42,16 @@ PassiveScalars::PassiveScalars(MeshBlock *pmb, ParameterInput *pin)  :
     coarse_r_(NSCALARS, pmb->ncc3, pmb->ncc2, pmb->ncc1,
               (pmb->pmy_mesh->multilevel ? AthenaArray<Real>::DataStatus::allocated :
                AthenaArray<Real>::DataStatus::empty)),
+    scalar_diffusion_defined(false),
     sbvar(pmb, &s, &coarse_s_, s_flux, true),
-    nu_scalar_iso{pin->GetOrAddReal("problem", "nu_scalar_iso", 0.0)},
-    //nu_scalar_aniso{pin->GetOrAddReal("problem", "nu_scalar_aniso", 0.0)},
-    scalar_diffusion_defined{(nu_scalar_iso > 0.0 ? true : false)},
     pmy_block(pmb) {
+
+  for (int n=0; n<NSCALARS; ++n) {
+		nu_scalar_iso[n] = pin->GetOrAddReal("problem", "nu_scalar_iso_" + std::to_string(n+1), 0.0);
+    if (nu_scalar_iso[n] > 0.0)
+      scalar_diffusion_defined = true;
+	}
+
   int nc1 = pmb->ncells1, nc2 = pmb->ncells2, nc3 = pmb->ncells3;
   Mesh *pm = pmy_block->pmy_mesh;
 

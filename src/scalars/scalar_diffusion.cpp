@@ -92,7 +92,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
       for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
         for (int i=is; i<=ie+1; ++i) {
-          nu_face = nu_scalar_iso;
+          nu_face = nu_scalar_iso[n];
           // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k,j,i-1));
           rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
           int idf = (n==1) ? 0 : 4;
@@ -122,7 +122,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
         for (int j=js; j<=je+1; ++j) {
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
-            nu_face = nu_scalar_iso;
+            nu_face = nu_scalar_iso[n];
             // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k,j-1,i));
             rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j-1,i));
             int idf = (n==1) ? 0 : 4;
@@ -153,7 +153,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
         for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
-            nu_face = nu_scalar_iso;
+            nu_face = nu_scalar_iso[n];
             // = 0.5*(kappa(DiffProcess::iso,k,j,i) + kappa(DiffProcess::iso,k-1,j,i));
             rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k-1,j,i));
             int idf = (n==1) ? 0 : 4;
@@ -222,9 +222,9 @@ Real PassiveScalars::NewDiffusionDt() {
 					len(i) = (f2) ? std::min(len(i), dx2(i)) : len(i);
 					len(i) = (f3) ? std::min(len(i), dx3(i)) : len(i);
 				}
-				if (nu_scalar_iso > 0.0) { // || (nu_scalar_aniso > 0.0)) {
+				if (nu_scalar_iso[n] > 0.0) { // || (nu_scalar_aniso > 0.0)) {
 					for (int i=il; i<=iu; ++i) {
-            nu_face  = nu_scalar_iso;
+            nu_face  = nu_scalar_iso[n];
             rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
             pr_face  = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
             inv_OmK  = std::pow(pmb->pcoord->x1f(i), 1.5);

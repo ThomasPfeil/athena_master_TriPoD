@@ -46,9 +46,11 @@ void EquationOfState::PassiveScalarConservedToPrimitive(
           // apply passive scalars floor to conserved variable first, then transform:
           // (multi-D fluxes may have caused it to drop below floor)
           
-          Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+          Real sfloor = (n==0) ? 1e-4 : scalar_floor_;
+          // printf("%.3e %.3e \n", s_n/d, r_n);
           s_n = (s_n < sfloor * d) ?  sfloor * d : s_n;
           r_n = s_n/d;
+
           // TODO(felker): continue to monitor the acceptability of this absolute 0. floor
           // (may create very large global conservation violations, e.g. the first few
           // cycles of the slotted cylinder test)
@@ -173,7 +175,7 @@ void EquationOfState::ApplyPassiveScalarFloors(AthenaArray<Real> &r, int n, int 
     Real& r_n  = r(n,i);
     // apply (prim) dimensionless concentration floor WITHOUT adjusting passive scalar
     // mass (conserved), unlike in floor in standard EOS
-    Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+    Real sfloor = (n==0) ? 1e-4 : scalar_floor_;
     r_n = (r_n > sfloor) ?  r_n : sfloor;
   }
   return;
@@ -191,7 +193,7 @@ void EquationOfState::ApplyPassiveScalarPrimitiveConservedFloors(
   Real& s_n  = s(n,k,j,i);
   Real& r_n  = r(n,k,j,i);
 
-  Real sfloor = (n==0) ? 5e-5 : scalar_floor_;
+  Real sfloor = (n==0) ? 1e-4 : scalar_floor_;
   s_n = (s_n < sfloor*w_d) ?  sfloor*w_d : s_n;
 
   // this next line, when applied indiscriminately, erases the accuracy gains performed in

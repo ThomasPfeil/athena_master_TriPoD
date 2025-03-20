@@ -1739,7 +1739,7 @@ void Mesh::Initialize(int res_flag, ParameterInput *pin) {
 
         if (NSCALARS > 0) {
           // r1/r_old for GR is currently unused:
-          pmb->peos->PassiveScalarConservedToPrimitive(ps->s, ph->u, ps->r, ps->r,
+          pmb->peos->PassiveScalarConservedToPrimitive(ps->s, pdf->df_cons, ps->r, ps->r,
                                                        pmb->pcoord,
                                                        il, iu, jl, ju, kl, ku);
         }
@@ -1787,7 +1787,7 @@ void Mesh::Initialize(int res_flag, ParameterInput *pin) {
 
           if (NSCALARS > 0) {
             pmb->peos->PassiveScalarConservedToPrimitiveCellAverage(
-                ps->s, ps->r, ps->r, pmb->pcoord, il, iu, jl, ju, kl, ku);
+                ps->s, pdf->df_cons, ps->r, pmb->pcoord, il, iu, jl, ju, kl, ku);
           }
         }
         // --------------------------
