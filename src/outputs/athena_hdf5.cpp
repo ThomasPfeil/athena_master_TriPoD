@@ -833,6 +833,20 @@ void ATHDF5Output::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
   delete[] data_buffers;
   delete[] active_flags;
 
+  // --------------------------------------------------------------
+  // Modified by Thomas Pfeil to allow for variable output timestep
+  // --------------------------------------------------------------
+  if(pin->GetOrAddBoolean(output_params.block_name,"log_output",0)){
+    int Nfiles = pin->GetOrAddInteger(output_params.block_name,"Nfiles",300);
+    Real tbeg = pin->GetOrAddReal(output_params.block_name,"dt",2.*PI);
+    Real tend_tbeg = pm->tlim / tbeg; // = tlim/t0; output #1 (t0) is at 2pi (1 orbit at r0)
+    Real told  = output_params.next_time;
+    Real tnext = std::pow(tend_tbeg, (Real)(output_params.file_number)/Nfiles) * tbeg;
+    output_params.dt = (tnext - told);
+  // printf("%d %.3e %.3e %.3e %.3e \n", output_params.file_number, tend_tbeg, told, tnext, output_params.dt);
+}
+// --------------------------------------------------------------
+
   // Reset parameters for next time file is written
   output_params.file_number++;
   output_params.next_time += output_params.dt;
