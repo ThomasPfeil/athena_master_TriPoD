@@ -87,11 +87,6 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                 AthenaArray<Real> &prim_df, FaceField &b, Real time, Real dt,
                 int il, int iu, int jl, int ju, int kl, int ku, int ngh);
 
-AthenaArray<Real> dust_flx;
-AthenaArray<Real> amax_arr;
-AthenaArray<Real> dPdr;
-AthenaArray<Real> t_relax;
-
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
 //! \brief Function to initialize problem-specific data in mesh class.  Can also be used
@@ -205,12 +200,45 @@ allow_dr_part= pin->GetBoolean("problem","allow_dr_part");
 }
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
-  if(ther_rel){
-    t_relax.NewAthenaArray(ncells3,ncells2,ncells1);
-    AllocateUserOutputVariables(1);
+  // Store initial condition and maximum particle size for internal use
+  AllocateRealUserMeshBlockDataField(3); // rhog, cs, vphi
+  Real orb_defined;
+  (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
+  OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
+  int dk = NGHOST;
+  if (block_size.nx3 == 1) dk = 0;
+
+  // Store initial condition in meshblock data -> avoid recalculation at later stages/in boundary conditions 
+  // Initial condition is axisymmetric -> 2D arrays
+  ruser_meshblock_data[0].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // gas density
+  ruser_meshblock_data[1].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // soundspeed
+  ruser_meshblock_data[2].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // azimuthal velocity
+
+  Real den, cs, vg_phi, rad, phi, z, x1, x2, x3;
+  for (int k=is-NGHOST; k<=ke+NGHOST; ++k) {
+    x3 = pcoord->x3v(k);
+    for (int j=js-NGHOST; j<=je+NGHOST; ++j) {
+      x2 = pcoord->x2v(j);
+    #pragma omp simd
+      for (int i=is-NGHOST; i<=ie+NGHOST; ++i) {
+        x1 = pcoord->x1v(i);
+
+        // Calculate initial condition
+        GetCylCoord(pcoord,rad,phi,z,i,j,0);
+        den    = DenProfileCyl(rad,phi,z);
+        cs     = SspeedProfileCyl(rad, phi, z);
+        vg_phi = VelProfileCyl(rad,phi,z);
+        if (porb->orbital_advection_defined)
+          vg_phi -= vK(porb, x1, x2, x3);
+
+        // Assign ruser_meshblock_data 0-2
+        ruser_meshblock_data[0](k, j, i) = den;
+        ruser_meshblock_data[1](k, j, i) = cs;
+        ruser_meshblock_data[2](k, j, i) = vg_phi;
+      }
+    }
   }
-  dPdr.NewAthenaArray(ncells3,ncells2,ncells1);
-  return;
+return;
 }
 
 
@@ -244,11 +272,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         GetCylCoord(pcoord,rad,phi,z,i,j,k); // convert to cylindrical coordinates
 
         // compute initial conditions in cylindrical coordinates
-        den = DenProfileCyl(rad,phi,z);
-        cs  = SspeedProfileCyl(rad, phi, z);
-        vel = VelProfileCyl(rad,phi,z);
-        if (porb->orbital_advection_defined)
-          vel -= vK(porb, x1, x2, x3);
+        den = ruser_meshblock_data[0](k, j, i);
+        cs  = ruser_meshblock_data[1](k, j, i);
+        vel = ruser_meshblock_data[2](k, j, i);
 
         // assign initial conditions for density and pressure (perturb profile)
         phydro->u(IDN,k,j,i) = (1.0 + pert*ran_rho) * den;
@@ -990,13 +1016,10 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           R_in_b  = R_min + damp_size_in;
           R_out_b = R_max - damp_size_out;
 
-          rho0  = DenProfileCyl(rad,phi,z);
-          cs    = SspeedProfileCyl(rad, phi, z);
+          rho0  = pmb->ruser_meshblock_data[0](k, j, i);
+          cs    = pmb->ruser_meshblock_data[1](k, j, i);
           vr0   = -1.5*(alpha_gas*cs*cs*std::sqrt(rad));
-          vphi0 = VelProfileCyl(rad,phi,z);
-          // Background state -> reached after damping
-          if (pmb->porb->orbital_advection_defined)
-            vphi0 -= vK(pmb->porb, pmb->pcoord->x1v(i), pmb-> pcoord->x2v(j), pmb->pcoord->x3v(k));
+          vphi0 = pmb->ruser_meshblock_data[2](k, j, i);
 
           f_in  =  std::max(0.0, (R_in_b - rad)) / (TINY_NUMBER+damp_size_in)/ std::sqrt(t_damp_in);
           f_out =  std::max(0.0, (rad - R_out_b)) / (TINY_NUMBER+damp_size_out) / std::sqrt(t_damp_out);
@@ -1253,12 +1276,10 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,il-i,j,k);
           GetCylCoord(pco,rad_,phi_,z_,il,j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad, phi, z);
+          den = pmb->ruser_meshblock_data[0](k, j, il-i);
+          cs  = pmb->ruser_meshblock_data[1](k, j, il-i);
           vr   = -1.5*(alpha_gas*cs*cs*std::sqrt(rad));
-          vphi = VelProfileCyl(rad,phi,z);
-          if (pmb->porb->orbital_advection_defined)
-            vphi -= vK(pmb->porb, pco->x1v(il-i), pco->x2v(j), pco->x3v(k));
+          vphi = pmb->ruser_meshblock_data[2](k, j, il-i);
           if(prim(IM1,k,j,il)<0.){
             prim(IM1,k,j,il-i) = prim(IM1,k,j,il);
           }else{
@@ -1342,12 +1363,10 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
         for (int i=1; i<=ngh; ++i) {
           GetCylCoord(pco,rad,phi,z,iu+i,j,k);
           GetCylCoord(pco,rad_,phi_,z_,iu,j,k);
-          den = DenProfileCyl(rad,phi,z);
-          cs  = SspeedProfileCyl(rad, phi, z);
-          vr  = -1.5*(alpha_gas*cs*cs*std::sqrt(rad));
-          vphi = VelProfileCyl(rad,phi,z);
-          if (pmb->porb->orbital_advection_defined)
-            vphi -= vK(pmb->porb, pco->x1v(iu+i), pco->x2v(j), pco->x3v(k));
+          den = pmb->ruser_meshblock_data[0](k, j, iu+i);
+          cs  = pmb->ruser_meshblock_data[1](k, j, iu+i);
+          vr   = -1.5*(alpha_gas*cs*cs*std::sqrt(rad));
+          vphi = pmb->ruser_meshblock_data[2](k, j, iu+i);
           if(prim(IM1,k,j,iu)>0.){
             prim(IM1,k,j,iu+i) = prim(IM1,k,j,iu);
             prim(IDN,k,j,iu+i) = prim(IDN,k,j,iu);
@@ -1427,13 +1446,4 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 
 void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin)
 {
-  if(ther_rel){
-    for(int k=ks; k<=ke; k++) {
-      for(int j=js; j<=je; j++) {
-        for(int i=is; i<=ie; i++) {
-          user_out_var(0,k,j,i) = t_relax(k,j,i);
-        }
-      }
-    }
-  }
 }
