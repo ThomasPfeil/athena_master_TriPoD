@@ -721,8 +721,14 @@ void BoundaryValues::ProlongateGhostCells(const NeighborBlock& nb,
   }
   if (NSCALARS > 0) {
     PassiveScalars *ps = pmb->pscalars;
-    pmb->peos->PassiveScalarPrimitiveToConserved(ps->r, ph->u, ps->s, pmb->pcoord,
-                                                 fsi, fei, fsj, fej, fsk, fek);
+    if(NDUSTFLUIDS>0.){
+      DustFluids *pdf = pmb->pdustfluids;
+      pmb->peos->PassiveScalarPrimitiveToConserved(ps->r, pdf->df_cons, ps->s, pmb->pcoord,
+        fsi, fei, fsj, fej, fsk, fek);
+    }else{
+      pmb->peos->PassiveScalarPrimitiveToConserved(ps->r, ph->u, ps->s, pmb->pcoord,
+        fsi, fei, fsj, fej, fsk, fek);
+    }
   }
   return;
 }
