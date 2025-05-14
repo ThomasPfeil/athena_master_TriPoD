@@ -1028,13 +1028,13 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           dampterm = std::exp(- dt * f_tot*f_tot / std::pow(rad, 1.5));
 
           // preserved quantities (same after damping)                     
-          eps0  = cons_df(0,k,j,i)/cons(IDN,k,j,i);
-          eps1  = cons_df(4,k,j,i)/cons(IDN,k,j,i);
-          amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
-          if(NSCALARS == 3){
-            C0 = cons_s(1,k,j,i)/cons_df(0,k,j,i);
-            C1 = cons_s(2,k,j,i)/cons_df(4,k,j,i);
-          }
+          // eps0  = cons_df(0,k,j,i)/cons(IDN,k,j,i);
+          // eps1  = cons_df(4,k,j,i)/cons(IDN,k,j,i);
+          // amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
+          // if(NSCALARS == 3){
+          //   C0 = cons_s(1,k,j,i)/cons_df(0,k,j,i);
+          //   C1 = cons_s(2,k,j,i)/cons_df(4,k,j,i);
+          // }
 
           // damping gas
           // cons(IDN,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0);
@@ -1209,8 +1209,8 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             tau     = fabs(eps1/epsdot_); // respective timescale
 
             // Shrink amax on this timescale
-            adot_     = std::min(0.0, amax/tau * (1-amax/1e-4));
-            adot     += adot_ * adot_max / sqrt(adot_ * adot_  + adot_max* adot_max);
+            adot_  = std::min(0.0, amax/tau * (1-amax/1e-4));
+            adot  += adot_ * adot_max / sqrt(adot_ * adot_  + adot_max* adot_max);
 
             // We want to keep our power law, so we move mass accordingly
             depsa    = deps1da((eps1+eps0), amax, q_d);
@@ -1288,7 +1288,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           prim(IM2,k,j,il-i) = vphi;
           prim(IM3,k,j,il-i) = prim(IM3,k,j,il);
           prim(IDN,k,j,il-i) = den;
-          prim(IPR,k,j,il-i) = den*SQR(cs);
+          prim(IPR,k,j,il-i) = prim(IDN,k,j,il-i)*SQR(cs);
 
           if (NDUSTFLUIDS > 0){
             // --------------------------------------------------------------------------------------------
@@ -1385,9 +1385,9 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             // eps0   = eps_bin(0, amax, eps_ini, q_dust);
             // eps1   = eps_bin(1, amax, eps_ini, q_dust);
 
-            amax  =  1.1*a_min; //std::min(a_max_ini, afr);
-            eps0   = eps_bin(0, amax, 1e-10, q_dust);
-            eps1   = eps_bin(1, amax, 1e-10, q_dust);
+            amax  =  a_max_ini; //std::min(a_max_ini, afr);
+            eps0   = eps_bin(0, amax, eps_ini, q_dust);
+            eps1   = eps_bin(1, amax, eps_ini, q_dust);
 
             // --------------------------------------------------------------------------------------------
             // Calculate Nakagawa Drift velocity for the dust
