@@ -75,7 +75,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
   int il, iu, jl, ju, kl, ku;
   int is = pmb->is; int js = pmb->js; int ks = pmb->ks;
   int ie = pmb->ie; int je = pmb->je; int ke = pmb->ke;
-  Real nu_face, rho_face, rhod_face, pr_face, inv_OmK, dprim_r_dx, dprim_r_dy, dprim_r_dz, St1_face, rad_face, amax_face, F, Fmax, lam, Chi, nu_face_;
+  Real nu_face, rho_face, rhod_face, pr_face, inv_OmK, dprim_r_dx, dprim_r_dy, dprim_r_dz, St1_face, rad_face, scalar_face, F, Fmax, lam, Chi, nu_face_;
 
   // i-direction
   jl = js, ju = je, kl = ks, ku = ke;
@@ -92,27 +92,33 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
       for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
         for (int i=is; i<=ie+1; ++i) {
-          int idf = (n==1) ? 0 : 4;
-          nu_face = nu_scalar_iso[n];
-          // if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
-          //   rad_face=pco->x1f(i);
-          // } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0) {
-          //   rad_face=std::abs(pco->x1f(i)*std::sin(pco->x2v(j)));
-          // }
-          // inv_OmK   = std::pow(rad_face, 1.5);
-          rho_face  = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
-          rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j,i-1));
-          pr_face   = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
-          amax_face = 0.5*(prim_r(0,k,j,i) + prim_r(0,k,j,i-1));
-          nu_face   = 0.5*(pmb->pdustfluids->nu_dustfluids_array(1,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(1,k,j,i-1));
-          dprim_r_dx = (prim_r(n,k,j,i) - prim_r(n,k,j,i-1))/pco->dx1v(i-1);
+          // nu_face = nu_scalar_iso[n];
+          // rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
+          // int idf = (n==1) ? 0 : 4;
+          // rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j,i-1));
+          // pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
+          // inv_OmK = std::pow(pco->x1f(i), 1.5);
+          // nu_face *= pr_face/rho_face * inv_OmK; 
+          // dprim_r_dx = (prim_r(n,k,j,i) - prim_r(n,k,j,i-1))/pco->dx1v(i-1);
+          // x1flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dx;
 
-          Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*amax_face;
+          int idf   = (n==1) ? 0 : 4;
+          int nu_id = (n==1) ? 0 : 1;
+          nu_face   = nu_scalar_iso[n];
+
+          rho_face    = 0.5*(w(IDN,k,j,i) + w(IDN,k,j,i-1));
+          rhod_face   = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j,i-1));
+          pr_face     = 0.5*(w(IPR,k,j,i) + w(IPR,k,j,i-1));
+          scalar_face = 0.5*(prim_r(n,k,j,i) + prim_r(n,k,j,i-1));
+          nu_face     = 0.5*(pmb->pdustfluids->nu_dustfluids_array(nu_id,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(nu_id,k,j,i-1));
+          dprim_r_dx  = (prim_r(n,k,j,i) - prim_r(n,k,j,i-1))/pco->dx1v(i-1);
+
+          Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
           F    = nu_face*rhod_face*dprim_r_dx;
           Chi  = std::fabs(F/Fmax);
           lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
-          x1flux(n,k,j,i) -= F*lam;
+          x1flux(n,k,j,i) -= lam*F;
         }
       }
     }
@@ -133,27 +139,33 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
         for (int j=js; j<=je+1; ++j) {
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
-            int idf   = (n==1) ? 0 : 4;
-            nu_face   = nu_scalar_iso[n];
-            // if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
-            //   rad_face=pco->x1v(i);
-            // } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0) {
-            //   rad_face=std::abs(pco->x1v(i)*std::sin(pco->x2f(j)));
-            // }
-            // inv_OmK   = std::pow(rad_face, 1.5);
-            rho_face  = 0.5*(w(IDN,k,j,i) + w(IDN,k,j-1,i));
-            rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j-1,i));
-            pr_face   = 0.5*(w(IPR,k,j,i) + w(IPR,k,j-1,i));
-            amax_face = 0.5*(prim_r(0,k,j,i) + prim_r(0,k,j-1,i));
-            nu_face   = 0.5*(pmb->pdustfluids->nu_dustfluids_array(1,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(1,k,j-1,i));
-            dprim_r_dy = (prim_r(n,k,j,i) - prim_r(n,k,j-1,i))/pco->h2v(i)/pco->dx2v(j-1);
+            // nu_face = nu_scalar_iso[n];
+            // rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k,j-1,i));
+            // int idf = (n==1) ? 0 : 4;
+            // rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j-1,i));
+            // pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k,j-1,i));
+            // inv_OmK = std::pow(pco->x1v(i), 1.5);
+            // nu_face *= pr_face/rho_face * inv_OmK; 
+            // dprim_r_dy = (prim_r(n,k,j,i) - prim_r(n,k,j-1,i))/pco->h2v(i)/pco->dx2v(j-1);
+            // x2flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dy;
 
-            Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*amax_face;
+            int idf   = (n==1) ? 0 : 4;
+            int nu_id = (n==1) ? 0 : 1;
+            nu_face   = nu_scalar_iso[n];
+
+            rho_face    = 0.5*(w(IDN,k,j,i) + w(IDN,k,j-1,i));
+            rhod_face   = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k,j-1,i));
+            pr_face     = 0.5*(w(IPR,k,j,i) + w(IPR,k,j-1,i));
+            scalar_face = 0.5*(prim_r(n,k,j,i) + prim_r(n,k,j-1,i));
+            nu_face     = 0.5*(pmb->pdustfluids->nu_dustfluids_array(nu_id,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(nu_id,k,j-1,i));
+            dprim_r_dy  = (prim_r(n,k,j,i) - prim_r(n,k,j-1,i))/pco->h2v(i)/pco->dx2v(j-1);
+
+            Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
             F    = nu_face*rhod_face*dprim_r_dy;
             Chi  = std::fabs(F/Fmax);
             lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
-            x2flux(n,k,j,i) -= F*lam; // flux = D*rhod * grad(c)
+            x2flux(n,k,j,i) -= lam*F; // flux = D*rhod * grad(c)
           }
         }
       }
@@ -175,28 +187,34 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
         for (int j=jl; j<=ju; ++j) {
 #pragma omp simd
           for (int i=il; i<=iu; ++i) {
-            int idf = (n==1) ? 0 : 4;
+            // nu_face = nu_scalar_iso[n];
+            // rho_face = 0.5*(w(IDN,k,j,i) + w(IDN,k-1,j,i));
+            // int idf = (n==1) ? 0 : 4;
+            // rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k-1,j,i));
+            // pr_face = 0.5*(w(IPR,k,j,i) + w(IPR,k-1,j,i));
+            // inv_OmK = std::pow(pco->x1v(i), 1.5);
+            // nu_face *= pr_face/rho_face * inv_OmK; 
+            // dprim_r_dz = (prim_r(n,k,j,i) - prim_r(n,k-1,j,i))/pco->dx3v(k-1)/pco->h31v(i)
+            //              /pco->h32v(j);
+            // x3flux(n,k,j,i) -= nu_face*rhod_face*dprim_r_dz;
+            
+            int idf   = (n==1) ? 0 : 4;
+            int nu_id = (n==1) ? 0 : 1;
             nu_face = nu_scalar_iso[n];
-            // if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
-            //   rad_face=pco->x1v(i);
-            // } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0) {
-            //   rad_face=std::abs(pco->x1v(i)*std::sin(pco->x2v(j)));
-            // }
-            // inv_OmK   = std::pow(rad_face, 1.5);
+
             rho_face  = 0.5*(w(IDN,k,j,i) + w(IDN,k-1,j,i));
             rhod_face = 0.5*(pmb->pdustfluids->df_prim(idf,k,j,i) + pmb->pdustfluids->df_prim(idf,k-1,j,i));
             pr_face   = 0.5*(w(IPR,k,j,i) + w(IPR,k-1,j,i));
-            amax_face = 0.5*(prim_r(0,k,j,i) + prim_r(0,k-1,j,i));
-            nu_face   = 0.5*(pmb->pdustfluids->nu_dustfluids_array(1,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(1,k-1,j,i));
-            // printf("Z: %.3e \n", nu_face/nu_face_);
+            scalar_face = 0.5*(prim_r(n,k,j,i) + prim_r(n,k-1,j,i));
+            nu_face   = 0.5*(pmb->pdustfluids->nu_dustfluids_array(nu_id,k,j,i) + pmb->pdustfluids->nu_dustfluids_array(nu_id,k-1,j,i));
             dprim_r_dz = (prim_r(n,k,j,i) - prim_r(n,k-1,j,i))/pco->dx3v(k-1)/pco->h31v(i)/pco->h32v(j);
 
-            Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*amax_face;
+            Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
             F    = nu_face*rhod_face*dprim_r_dz;
             Chi  = std::fabs(F/Fmax);
             lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
-            x3flux(n,k,j,i) -= F*lam;
+            x3flux(n,k,j,i) -= lam*F;
           }
         }
       }
