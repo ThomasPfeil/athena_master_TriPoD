@@ -1055,9 +1055,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           //   cons_s(2,k,j,i) = C1 * cons_df(4,k,j,i);
           // }
 
-          // --------------------------------------------------------------------------------------------
-          // Calculate Nakagawa Drift velocity for the dust
-          // --------------------------------------------------------------------------------------------
+          // // --------------------------------------------------------------------------------------------
+          // // Calculate Nakagawa Drift velocity for the dust
+          // // --------------------------------------------------------------------------------------------
           // dr = pmb->pcoord->x1v(i-1) - pmb->pcoord->x1v(i);
           // dPdx = (prim(IPR,k,j,i-1) - prim(IPR,k,j,i))/dr;
           // Sig = unit_rho * prim(IDN,k,j,i);
@@ -1385,7 +1385,7 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             // eps0   = eps_bin(0, amax, eps_ini, q_dust);
             // eps1   = eps_bin(1, amax, eps_ini, q_dust);
 
-            amax  =  a_max_ini; //std::min(a_max_ini, afr);
+            amax  =  pmb->pscalars->r(0,k,j,iu); //std::min(a_max_ini, afr);
             eps0   = eps_bin(0, amax, eps_ini, q_dust);
             eps1   = eps_bin(1, amax, eps_ini, q_dust);
 
