@@ -43,8 +43,8 @@ Real DenProfileCyl_dust(const Real rad, const Real phi, const Real z, const Real
 Real SspeedProfileCyl(const Real rad, const Real phi, const Real z);
 Real VelProfileCyl(const Real rad, const Real phi, const Real z);
 Real afr_ini(const Real rad, const Real phi, const Real z);
-Real Stokes_vol(Real size, Real rhog, Real cs, Real OmK);
-Real Stokes_int(Real size, Real Sig);
+Real Stokes_vol(Real size, Real rhog, Real cs, Real OmK, Real afac);
+Real Stokes_int(Real size, Real Sig, Real afac);
 Real log_size(int n, Real amax, Real amin);
 Real mean_size(Real amax, Real amin, Real qd);
 Real eps_bin(int bin, Real amax, Real epstot, Real qd);
@@ -78,6 +78,7 @@ Real R_p, Mp_s;
 Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
+Real sfac, afac;
 bool beta_cool, dust_cool, ther_rel, isotherm, MMSN, coag, infall, damping, planet, planet_power, Benitez, ind_term;
 } // namespace
 
@@ -109,7 +110,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   beta_cool    = pin->GetBoolean("problem","beta_cool");
   dust_cool    = pin->GetBoolean("problem","dust_cool");
   isotherm     = pin->GetBoolean("problem","isotherm");
-  coag         = pin->GetBoolean("problem","coag");
+ coag         = pin->GetBoolean("problem","coag");
   infall       = pin->GetBoolean("problem","infall");
   planet       = pin->GetBoolean("problem","planet");
   planet_power = pin->GetBoolean("problem","planet_power");
@@ -161,7 +162,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   dsize  = pin->GetReal("problem","dsize");
   t_damp = pin->GetReal("problem","t_damp");
 
-
+  afac  = 0.4;
+  sfac  = 8.0;
   // Define the code units - needed for Stokes number calculation
   unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar);  // column density at rchar
   if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0)
@@ -270,8 +272,8 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         a0 = mean_size(a_min, aint, q_dust);
         
         sigma = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
-        St0 = Stokes_int(a0, sigma);
-        St1 = Stokes_int(a1, sigma);
+        St0 = Stokes_int(a0, sigma, afac);
+        St1 = Stokes_int(a1, sigma, afac);
         
         Real h = cs/std::pow(rad,-1.5);
         rhod0 = DenProfileCyl_dust(rad, phi, z, St0, eps0);
@@ -349,14 +351,14 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           a0 = mean_size(a_min, aint, q_dust);
           
           sigma = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
-          St0 = Stokes_int(a0, sigma);
-          St1 = Stokes_int(a1, sigma);
+          St0 = Stokes_int(a0, sigma, afac);
+          St1 = Stokes_int(a1, sigma, afac);
           
           Real h = cs/std::pow(rad,-1.5);
           rhod0 = DenProfileCyl_dust(rad, phi, z, St0, eps0);
           rhod1 = DenProfileCyl_dust(rad, phi, z, St1, eps1);
 
-          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 1e-4 : a_max_ini;
+          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 2e-5 : a_max_ini;
 
           int dust_id = 0;
           int rho_id  = 4*dust_id;
@@ -475,12 +477,12 @@ Real VelProfileCyl(const Real rad, const Real phi, const Real z) {
 
 //----------------------------------------------------------------------------------------
 //! Computes Stokes number
-Real Stokes_int(Real size, Real Sig){
-  return 0.5*PI * size*rho_m/Sig;
+Real Stokes_int(Real size, Real Sig, Real afac){
+  return afac * 0.5*PI * size*rho_m/Sig;
 }
 
-Real Stokes_vol(Real size, Real rhog, Real cs, Real OmK){
-  return std::sqrt(PI/8.) * size*rho_m/(cs*unit_vel * rhog*unit_rho) * OmK * unit_vel/unit_len;
+Real Stokes_vol(Real size, Real rhog, Real cs, Real OmK, Real afac){
+  return afac * std::sqrt(PI/8.) * size*rho_m/(cs*unit_vel * rhog*unit_rho) * OmK * unit_vel/unit_len;
 }
 
 //----------------------------------------------------------------------------------------
@@ -547,8 +549,8 @@ Real dv_turb(Real tau_mx, Real tau_mn, Real t0, Real v0, Real ts, Real vs, Real 
     st1 = tau_mx/t0;
     st2 = tau_mn/t0;
 
-    vg2 = 1.5 * SQR(v0); //note the square
-    ya = 1.6; // approximate solution for st*=y*st1; valid for st1 << 1.
+    vg2 = SQR(v0); //note the square
+    ya  = 1.6; // approximate solution for st*=y*st1; valid for st1 << 1.
 
     if (tau_mx < 0.2*ts){
         /*
@@ -645,8 +647,8 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z)
   dvBr = std::sqrt(16.0 * cs*cs * mp * mue/(PI*m1));
 
   // ------------ Settling --------------------
-  Real H     = cs/ (std::sqrt(gamma_gas) * omega);
-  dvset = std::fabs((St_mx/(St_mx+1.) - St_mn/(St_mn+1.))*z) * omega;
+  Real H = cs/omega;
+  dvset = std::min(z * St_mx * omega, cs) - std::min(z * St_mn * omega, cs); 
 
   // ------------ Drift -------------
   vdrmax   = - 0.5 * H*H * omega/(rhog*cs*cs) * dp;
@@ -689,8 +691,8 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
         a0 = mean_size(a_min, a_int, q_d);
         a1 = mean_size(a_int,  amax, q_d);
         
-        St0 = Stokes_vol(a0, prim(IDN,k,j,i), cs, om);
-        St1 = Stokes_vol(a1, prim(IDN,k,j,i), cs, om);
+        St0 = Stokes_vol(a0, prim(IDN,k,j,i), cs, om, afac);
+        St1 = Stokes_vol(a1, prim(IDN,k,j,i), cs, om, afac);
 
         // printf("%.3e %.3e %.3e %.3e %.3e %.3e %.3e %.3e \n", rad,phi,z,amax, a0, a1, St0, St1);
 
@@ -736,8 +738,8 @@ void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
         a0 = mean_size(a_min, a_int, q_d);
         a1 = mean_size(a_int,  amax, q_d);
 
-        St0 = Stokes_vol(a0, w(IDN,k,j,i), cs, om);
-        St1 = Stokes_vol(a1, w(IDN,k,j,i), cs, om);
+        St0 = Stokes_vol(a0, w(IDN,k,j,i), cs, om, 1.);
+        St1 = Stokes_vol(a1, w(IDN,k,j,i), cs, om, 1.);
 
         // printf("%.3e %.3e %.3e %.3e %.3e %.3e %.3e %.3e \n", rad,phi,z,amax, a0, a1, St0, St1);
 
@@ -788,8 +790,8 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   Real cs_iso, omega; // disk properties
   Real dPdr, cs_i, Om_i, H_i, rho, tau_f, Re, ts, vgas, // disk properties
        amax, aint, a0, a1, m0, m1, eps0, eps1, q_d, St_mx, St_mn, sig11, sig01, // current size distribution properies
-       dvmax, dv11, dv01, vsmall, vinter, vtr_simp, vdrmax, dvdr_r, dvdr_phi, // relative particle velocities
-       afac, s, f, // model parameters
+       dvmax, dv11, dv01, vsmall, vinter, vtr_simp, vdrmax, dvdr_r, dvdr_phi, dv_set, // relative particle velocities
+       f, // model parameters
        pfrag, pstick, pint, psmall, pdr, // transition functions
        xi_frg, xi, xi_frdr, xi_swp, // size distributione expoenents
        sm_int, Stmx2p1, Stmn2p1, vtr_vdr, // helper variables 
@@ -891,8 +893,8 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           //                            Local gas disk properties
           //--------------------------------------------------------------------------------------
           Om_i   = std::pow(rad, -1.5) * unit_vel/unit_len;
-          cs_i   = std::sqrt(gamma_gas * prim(IPR,k,j,i)/prim(IDN,k,j,i)) * unit_vel;
-          H_i    = cs_i/(Om_i*std::sqrt(gamma_gas));
+          cs_i   = std::sqrt(prim(IPR,k,j,i)/prim(IDN,k,j,i)) * unit_vel;
+          H_i    = cs_i/Om_i;
           rho    = prim(IDN,k,j,i) * unit_rho;
           tau_f  = rho_m / (std::sqrt(8.0/PI)*cs_i * rho);
           Re     = alpha_turb * 2e-15 * rho * cs_i / Om_i / (mp * mue);
@@ -912,12 +914,10 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           m0    = 4./3.*PI*rho_m*std::pow(a0,3.0);
           m1    = 4./3.*PI*rho_m*std::pow(a1,3.0);
           // --------- Relative Grain Velocities ----------
-          afac  = 0.4;
-          s     = 3.0;
-          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i);
-          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i);
-          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i);
-          // printf("%.3e %.3e %.3e %.3e \n", r_i/au, rho, cs_i, dPdr);
+          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i)) + SQR(afac*prim_df(6,k,j,i)*unit_vel)); // + SQR(afac*prim_df(5,k,j,i)*unit_vel)                      ;
+          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i))     + SQR(afac*prim_df(6,k,j,i)*unit_vel)); // + SQR(afac*prim_df(5,k,j,i)*unit_vel);
+          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i))          + SQR((prim_df(2,k,j,i) - prim_df(6,k,j,i))*unit_vel)); //+ SQR((prim_df(1,k,j,i) - prim_df(5,k,j,i))*unit_vel);
+          // ------------------ // relative turbulent velocity                             // relative radial drift                               // relative settling 
 
           //--------------------------------------------------------------------------------------
           //               Determine the coagulation and fragmentation parameters
@@ -934,17 +934,18 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 
           // ------- Determine if Drift-Frag. Limited --------
           St_mx    = amax*tau_f*Om_i;
-          St_mn    = 0.4*St_mx;
+          St_mn    = afac*St_mx;
           Stmx2p1  = SQR(St_mx) + 1.;
           Stmn2p1  = SQR(St_mn) + 1.;
-          vgas     = std::sqrt(1.5*alpha_turb)*cs_i;
+          vgas     = std::sqrt(alpha_turb)*cs_i;
           vsmall   = vgas * std::sqrt((St_mx-St_mn)/(St_mx+St_mn) * (SQR(St_mx)/(St_mx+pow(Re,-0.5)) - SQR(St_mn)/(St_mn+pow(Re,-0.5))));
           vinter   = vgas * std::sqrt(2.292*St_mx);
           vtr_simp = psmall*vsmall + pint*vinter;
           vdrmax   = - 0.5 / (rho*Om_i) * dPdr;
           dvdr_r   = std::fabs(2.*vdrmax * (St_mx/Stmx2p1 - St_mn/Stmn2p1));
           dvdr_phi = std::fabs(vdrmax * (Stmx2p1-Stmn2p1)/(Stmx2p1*Stmn2p1));
-          vtr_vdr  = std::pow(0.3*vtr_simp/std::max(std::sqrt(SQR(dvdr_r) + SQR(dvdr_phi)),TINY_NUMBER), 6.0);
+          dv_set   = z_i * (std::min(St_mx, 0.5) - std::min(St_mn, 0.5)) * Om_i; 
+          vtr_vdr  = std::pow(0.3*vtr_simp/std::max(std::sqrt(SQR(dvdr_r) + SQR(dvdr_phi) + SQR(dv_set)),TINY_NUMBER), 6.0);
           pdr      = 0.5*((1-vtr_vdr)/(1+vtr_vdr)) + 0.5;
 
           // --------- Resulting power law exponent xi -------
@@ -969,7 +970,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           deps01 = deps01 * epsdot_max / sqrt(deps01 * deps01  + epsdot_max* epsdot_max); // limit mass exchange rate
           deps10 = deps10 * epsdot_max / sqrt(deps10 * deps10  + epsdot_max* epsdot_max); // limit mass exchange rate
 
-          adot  = prim_df(4,k,j,i)*unit_rho * dvmax / rho_m * (1.0 - 2.0 / (1.0 + pow(v_frag/dvmax,s)));
+          adot  = prim_df(4,k,j,i)*unit_rho * dvmax / rho_m * (1.0 - 2.0 / (1.0 + pow(v_frag/dvmax,sfac)));
           adot *= unit_len/unit_vel; // unit conversion to [cm/code_time]
           adot_max = 0.4*amax/dt; // limit the rate
           adot     = adot * adot_max / sqrt(adot * adot  + adot_max* adot_max);
@@ -984,13 +985,13 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             tau     = fabs(eps1/epsdot_); // respective timescale
 
             // Shrink amax on this timescale
-            adot_     = std::min(0.0, amax/tau * (1-amax/1e-4));
+            adot_    = std::min(0.0, amax/tau * (1-amax/2e-5));
             adot     += adot_ * adot_max / sqrt(adot_ * adot_  + adot_max* adot_max);
 
             // We want to keep our power law, so we move mass accordingly
             depsa    = deps1da((eps1+eps0), amax, q_d);
             epsdot_  = std::max(0.0,depsa * adot_);
-            deps01  += epsdot_ * epsdot_max / sqrt(epsdot_ * epsdot_  + epsdot_max* epsdot_max);
+            deps01   += epsdot_ * epsdot_max / sqrt(epsdot_ * epsdot_  + epsdot_max* epsdot_max);
           }
 
           // Momentum Exchange Rates
@@ -1063,7 +1064,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           if (NON_BAROTROPIC_EOS)
             prim(IEN,k,j,il-i) = SQR(cs)*den;
           if (NDUSTFLUIDS > 0){
-            amax = 1e-4;
+            amax = 2e-5;
 
             dust_id = 0;
             rho_id  = 4*dust_id;
@@ -1088,7 +1089,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           if(NSCALARS == 1){
             pmb->pscalars->r(0,k,j,il-i) = pmb->pscalars->r(0,k,j,il);
           }else if(NSCALARS==3){
-            pmb->pscalars->r(0,k,j,il-i) = amax;
+            pmb->pscalars->r(0,k,j,il-i) = pmb->pscalars->r(0,k,j,il);
             pmb->pscalars->r(1,k,j,il-i) = C_in;
             pmb->pscalars->r(2,k,j,il-i) = C_in;
           }
