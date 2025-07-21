@@ -794,14 +794,19 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
         inv_omega = std::pow(rad, 1.5);
         Sig = unit_rho * prim(IDN, k,j,i);
 
-        amax = pmb->pscalars->r(0,k,j,i);
-        a_int = std::sqrt(a_min*amax);
-        q_d = std::log(prim_df(4,k,j,i)/prim_df(0,k,j,i))/std::log(amax/a_int) - 4.;
-        if (q_d >= 0) q_d = std::max(q_d, 0.0);
-        if (q_d  < 0) q_d = std::max(q_d, -20.0);
+        if(coag){
+          amax = pmb->pscalars->r(0,k,j,i);
+          a_int = std::sqrt(a_min*amax);
+          q_d = std::log(prim_df(4,k,j,i)/prim_df(0,k,j,i))/std::log(amax/a_int) - 4.;
+          if (q_d >= 0) q_d = std::max(q_d, 0.0);
+          if (q_d  < 0) q_d = std::max(q_d, -20.0);
 
-        a0 = mean_size(a_min, a_int, q_d);
-        a1 = mean_size(a_int,  amax, q_d);
+          a0 = mean_size(a_min, a_int, q_d);
+          a1 = mean_size(a_int,  amax, q_d);
+        } else {
+          a0 = std::sqrt(a_min*a_max_ini);
+          a1 = a_max_ini;
+        }
 
         St0 = Stokes_int(a0, Sig);
         St1 = Stokes_int(a1, Sig);
@@ -840,14 +845,19 @@ void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
         H  = cs/om;
         nu_gas = delta_ini * cs * H;
 
-        amax = pmb->pscalars->r(0,k,j,i);
-        a_int = std::sqrt(a_min*amax);
-        q_d = std::log(prim_df(4,k,j,i)/prim_df(0,k,j,i))/std::log(amax/a_int) - 4.;
-        if (q_d >= 0) q_d = std::max(q_d, 0.0);
-        if (q_d  < 0) q_d = std::max(q_d, -20.0);
+        if(coag){
+          amax = pmb->pscalars->r(0,k,j,i);
+          a_int = std::sqrt(a_min*amax);
+          q_d = std::log(prim_df(4,k,j,i)/prim_df(0,k,j,i))/std::log(amax/a_int) - 4.;
+          if (q_d >= 0) q_d = std::max(q_d, 0.0);
+          if (q_d  < 0) q_d = std::max(q_d, -20.0);
 
-        a0 = mean_size(a_min, a_int, q_d);
-        a1 = mean_size(a_int,  amax, q_d);
+          a0 = mean_size(a_min, a_int, q_d);
+          a1 = mean_size(a_int,  amax, q_d);
+        } else {
+          a0 = std::sqrt(a_min*a_max_ini);
+          a1 = a_max_ini;
+        }
 
         St0 = Stokes_int(a0, Sig);
         St1 = Stokes_int(a1, Sig);
@@ -1028,16 +1038,19 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           dampterm = std::exp(- dt * f_tot*f_tot / std::pow(rad, 1.5));
 
           // preserved quantities (same after damping)                     
-          // eps0  = cons_df(0,k,j,i)/cons(IDN,k,j,i);
-          // eps1  = cons_df(4,k,j,i)/cons(IDN,k,j,i);
-          // amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
-          // if(NSCALARS == 3){
-          //   C0 = cons_s(1,k,j,i)/cons_df(0,k,j,i);
-          //   C1 = cons_s(2,k,j,i)/cons_df(4,k,j,i);
-          // }
+          eps0  = cons_df(0,k,j,i)/cons(IDN,k,j,i);
+          eps1  = cons_df(4,k,j,i)/cons(IDN,k,j,i);
+          if(NSCALARS==1){
+            amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
+          }
+          if(NSCALARS == 3){
+            amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
+            C0 = cons_s(1,k,j,i)/cons_df(0,k,j,i);
+            C1 = cons_s(2,k,j,i)/cons_df(4,k,j,i);
+          }
 
           // damping gas
-          // cons(IDN,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0);
+          cons(IDN,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0);
           cons(IM1,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)*(prim(IVX,k,j,i) - vr0);
           cons(IM2,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)*(prim(IVY,k,j,i) - vphi0);
           cons(IM3,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)*prim(IVZ,k,j,i);
@@ -1047,42 +1060,53 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
                                       + SQR(cons(IM3,k,j,i)))/cons(IDN,k,j,i);
 
           // damping dust
-          // cons_df(0,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0)*eps0;
-          // cons_df(4,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0)*eps1;
-          // cons_s(0,k,j,i) = amax * cons_df(4,k,j,i); //conserve particle size while damping
-          // if(NSCALARS == 3){
-          //   cons_s(1,k,j,i) = C0 * cons_df(0,k,j,i);
-          //   cons_s(2,k,j,i) = C1 * cons_df(4,k,j,i);
-          // }
+          cons_df(0,k,j,i) = cons(IDN,k,j,i)*eps0;
+          cons_df(4,k,j,i) = cons(IDN,k,j,i)*eps1;
+          if(NSCALARS==1){
+            cons_s(0,k,j,i) = amax * cons_df(4,k,j,i); //conserve particle size while damping
+          }else if(NSCALARS == 3){
+            cons_s(0,k,j,i) = amax * cons_df(4,k,j,i); //conserve particle size while damping
+            cons_s(1,k,j,i) = C0 * cons_df(0,k,j,i);
+            cons_s(2,k,j,i) = C1 * cons_df(4,k,j,i);
+          }
 
-          // // --------------------------------------------------------------------------------------------
-          // // Calculate Nakagawa Drift velocity for the dust
-          // // --------------------------------------------------------------------------------------------
-          // dr = pmb->pcoord->x1v(i-1) - pmb->pcoord->x1v(i);
-          // dPdx = (prim(IPR,k,j,i-1) - prim(IPR,k,j,i))/dr;
-          // Sig = unit_rho * prim(IDN,k,j,i);
-          // a_int = std::sqrt(a_min*amax);
+          // --------------------------------------------------------------------------------------------
+          // Calculate Nakagawa Drift velocity for the dust
+          // --------------------------------------------------------------------------------------------
+          dr = pmb->pcoord->x1v(i-1) - pmb->pcoord->x1v(i+1);
+          dPdx = (prim(IPR,k,j,i-1) - prim(IPR,k,j,i+1))/dr;
+          Sig = unit_rho * prim(IDN,k,j,i);
+          
+          if(coag){
+            amax = prim_s(0,k,j,i);
+            a_int = std::sqrt(a_min*amax);
+            q_d = std::log(prim_df(4,k,j,i)/prim_df(0,k,j,i))/std::log(amax/a_int) - 4.;
+            if (q_d >= 0) q_d = std::max(q_d, 0.0);
+            if (q_d  < 0) q_d = std::max(q_d, -20.0);
+            a0 = mean_size(a_min, a_int, q_d);
+            a1 = mean_size(a_int,  amax, q_d);
+          } else {
+            a0 = std::sqrt(a_min*a_max_ini);
+            a1 = a_max_ini;
+          }
 
-          // a0 = mean_size(a_min, a_int, q_dust);
-          // a1 = mean_size(a_int,  amax, q_dust);
+          St0 = Stokes_int(a0, Sig);
+          St1 = Stokes_int(a1, Sig);
 
-          // St0 = Stokes_int(a0, Sig);
-          // St1 = Stokes_int(a1, Sig);
+          Real dv0_r = St0*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St0) + 1.);
+          Real dv1_r = St1*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St1) + 1.);
 
-          // Real dv0_r = St0*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St0) + 1.);
-          // Real dv1_r = St1*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St1) + 1.);
+          Real dv0_phi = -0.5*SQR(St0)*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St0) + 1.);
+          Real dv1_phi = -0.5*SQR(St1)*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St1) + 1.);
+          // -------------------------------------------------------------------------------------------
 
-          // Real dv0_phi = -0.5*SQR(St0)*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St0) + 1.);
-          // Real dv1_phi = -0.5*SQR(St1)*dPdx/(prim(IDN,k,j,i)*std::pow(rad,-1.5)) / (SQR(St1) + 1.);
-          // // -------------------------------------------------------------------------------------------
+          cons_df(1,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(1,k,j,i) - (vr0+dv0_r));
+          cons_df(2,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(2,k,j,i) - (vphi0+dv0_phi));
+          cons_df(3,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(3,k,j,i));
 
-          // cons_df(1,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(1,k,j,i) - (vr0+dv0_r));
-          // cons_df(2,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(2,k,j,i) - (vphi0+dv0_phi));
-          // cons_df(3,k,j,i) -= (1.-dampterm) * prim_df(0,k,j,i)*(prim_df(3,k,j,i));
-
-          // cons_df(5,k,j,i) -= (1.-dampterm) * prim_df(1,k,j,i)*(prim_df(5,k,j,i) - (vr0+dv1_r));
-          // cons_df(6,k,j,i) -= (1.-dampterm) * prim_df(1,k,j,i)*(prim_df(6,k,j,i) - (vphi0+dv1_phi));
-          // cons_df(7,k,j,i) -= (1.-dampterm) * prim_df(1,k,j,i)*(prim_df(7,k,j,i));
+          cons_df(5,k,j,i) -= (1.-dampterm) * prim_df(4,k,j,i)*(prim_df(5,k,j,i) - (vr0+dv1_r));
+          cons_df(6,k,j,i) -= (1.-dampterm) * prim_df(4,k,j,i)*(prim_df(6,k,j,i) - (vphi0+dv1_phi));
+          cons_df(7,k,j,i) -= (1.-dampterm) * prim_df(4,k,j,i)*(prim_df(7,k,j,i));
         }
 
         //--------------------------------------------------------------------------------------
@@ -1248,11 +1272,11 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             cons_s(2,k,j,i) -= dt*prim(IDN,k,j,i) * (prim_s(2,k,j,i)*deps10 - prim_s(1,k,j,i)*deps01);
           }
           // printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, rho0=%.3e, rho1=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i),cons_df(0,k,j,i),cons_df(4,k,j,i));
-          if(adot!=adot || deps10!=deps10 || deps01!=deps01 || cons_s(0,k,j,i)!=cons_s(0,k,j,i) || cons_df(0,k,j,i)!=cons_df(0,k,j,i) || cons_df(4,k,j,i)!=cons_df(4,k,j,i)){
-            printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, rho0=%.3e, rho1=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i),cons_df(0,k,j,i),cons_df(4,k,j,i));
-            std::cout << "NaN Found";
-            std::exit(EXIT_FAILURE);
-          }
+          // if(adot!=adot || deps10!=deps10 || deps01!=deps01 || cons_s(0,k,j,i)!=cons_s(0,k,j,i) || cons_df(0,k,j,i)!=cons_df(0,k,j,i) || cons_df(4,k,j,i)!=cons_df(4,k,j,i)){
+          //   printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, rho0=%.3e, rho1=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i),cons_df(0,k,j,i),cons_df(4,k,j,i));
+          //   std::cout << "NaN Found";
+          //   std::exit(EXIT_FAILURE);
+          // }
         }
       }
     }
@@ -1267,7 +1291,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                 AthenaArray<Real> &prim_df, FaceField &b, Real time, Real dt,
                 int il, int iu, int jl, int ju, int kl, int ku, int ngh) {
   Real rad(0.0), phi(0.0), z(0.0), rad_(0.0), phi_(0.0), z_(0.0);
-  Real cs, vr, vphi, den, Sigma, afr, amax, a_int_ini, eps0, eps1, a0, a1, St0, St1;
+  Real cs, vr, vphi, den, Sigma, afr, amax, a_int_ini, eps0, eps1, a0, a1, St0, St1, a_int, q_d;
   OrbitalVelocityFunc &vK = pmb->porb->OrbitalVelocity;
   int dust_id, rho_id, v1_id, v2_id, v3_id;
   if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
@@ -1294,14 +1318,19 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             // --------------------------------------------------------------------------------------------
             // Calculate Nakagawa Drift velocity for the dust
             // --------------------------------------------------------------------------------------------
-            amax = pmb->pscalars->r(0,k,j,il);
             Real dr = pmb->pcoord->x1v(il-i+1) - pmb->pcoord->x1v(il-i);
             Real dp = (prim(IPR,k,j,il-i+1) - prim(IPR,k,j,il-i))/dr;
             Real Sig = unit_rho * prim(IDN,k,j,il-i);
-            Real a_int = std::sqrt(a_min*amax);
 
-            a0 = mean_size(a_min, a_int, q_dust);
-            a1 = mean_size(a_int,  amax, q_dust);
+            if(coag){
+              amax = pmb->pscalars->r(0,k,j,il);
+              a_int = std::sqrt(a_min*amax);
+              a0 = mean_size(a_min, a_int, q_dust);
+              a1 = mean_size(a_int,  amax, q_dust);
+            } else {
+              a0 = std::sqrt(a_min*a_max_ini);
+              a1 = a_max_ini;
+            }
 
             St0 = Stokes_int(a0, Sig);
             St1 = Stokes_int(a1, Sig);
@@ -1353,7 +1382,7 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                 AthenaArray<Real> &prim_df, FaceField &b, Real time, Real dt,
                 int il, int iu, int jl, int ju, int kl, int ku, int ngh) {
   Real rad(0.0), phi(0.0), z(0.0), rad_(0.0), phi_(0.0), z_(0.0);
-  Real cs, vr, vphi, den, Sigma, afr, amax, eps0, eps1;
+  Real cs, vr, vphi, den, Sigma, afr, amax, eps0, eps1, q_d, a_int;
   Real a_int_ini, a0, a1, St0, St1, Hd0, Hd1;
   int dust_id, rho_id, v1_id, v2_id, v3_id;
   OrbitalVelocityFunc &vK = pmb->porb->OrbitalVelocity;
@@ -1380,25 +1409,26 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           prim(IM3,k,j,iu+i) = prim(IM3,k,j,iu);
           
           if (NDUSTFLUIDS > 0){
-            // afr = afr_ini(rad, phi, z);
-            // amax  =  pmb->pscalars->r(0,k,j,iu); //std::min(a_max_ini, afr);
-            // eps0   = eps_bin(0, amax, eps_ini, q_dust);
-            // eps1   = eps_bin(1, amax, eps_ini, q_dust);
-
-            amax  =  pmb->pscalars->r(0,k,j,iu); //std::min(a_max_ini, afr);
-            eps0   = eps_bin(0, amax, eps_ini, q_dust);
-            eps1   = eps_bin(1, amax, eps_ini, q_dust);
-
             // --------------------------------------------------------------------------------------------
             // Calculate Nakagawa Drift velocity for the dust
             // --------------------------------------------------------------------------------------------
             Real dr = pmb->pcoord->x1v(iu+i-1) - pmb->pcoord->x1v(iu+i);
             Real dp = (prim(IPR,k,j,iu+i-1) - prim(IPR,k,j,iu+i))/dr;
             Real Sig = unit_rho * prim(IDN,k,j,iu+i);
-            Real a_int = std::sqrt(a_min*amax);
 
-            a0 = mean_size(a_min, a_int, q_dust);
-            a1 = mean_size(a_int,  amax, q_dust);
+            if(coag){
+              amax  =  pmb->pscalars->r(0,k,j,iu); //std::min(a_max_ini, afr);
+              a_int = std::sqrt(a_min*amax);
+              eps0   = eps_bin(0, amax, eps_ini, q_dust);
+              eps1   = eps_bin(1, amax, eps_ini, q_dust);
+              a0 = mean_size(a_min, a_int, q_dust);
+              a1 = mean_size(a_int,  amax, q_dust);
+            } else {
+              a0 = std::sqrt(a_min*a_max_ini);
+              a1 = a_max_ini;
+              eps0   = eps_bin(0, a_max_ini, eps_ini, q_dust);
+              eps1   = eps_bin(1, a_max_ini, eps_ini, q_dust);
+            }
 
             St0 = Stokes_int(a0, Sig);
             St1 = Stokes_int(a1, Sig);
