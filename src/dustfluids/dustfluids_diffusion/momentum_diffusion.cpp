@@ -43,6 +43,11 @@ void DustFluidsDiffusion::DustFluidsMomentumDiffusiveFlux(const AthenaArray<Real
   AthenaArray<Real> &x1flux = df_diff_flux[X1DIR];
   AthenaArray<Real> &x2flux = df_diff_flux[X2DIR];
   AthenaArray<Real> &x3flux = df_diff_flux[X3DIR];
+
+  AthenaArray<Real> &x1flux_adv = pdf->df_flux[X1DIR];
+  AthenaArray<Real> &x2flux_adv = pdf->df_flux[X2DIR];
+  AthenaArray<Real> &x3flux_adv = pdf->df_flux[X3DIR];
+
   int il, iu, jl, ju, kl, ku;
   int is = pmb_->is; int js = pmb_->js; int ks = pmb_->ks;
   int ie = pmb_->ie; int je = pmb_->je; int ke = pmb_->ke;
@@ -55,6 +60,9 @@ void DustFluidsDiffusion::DustFluidsMomentumDiffusiveFlux(const AthenaArray<Real
     else // 3D
       jl = js - 1, ju = je + 1, kl = ks - 1, ku = ke + 1;
   }
+
+  pdf->dfccdif.diff_mom_cc.ZeroClear();
+  pdf->dfccdif.CalculateDiffusiveMomentum_New(prim_df, w);
 
   // i-direction loop
   for (int n=0; n<NDUSTFLUIDS; ++n) {
@@ -69,25 +77,21 @@ void DustFluidsDiffusion::DustFluidsMomentumDiffusiveFlux(const AthenaArray<Real
         for (int i=is; i<=ie+1; ++i) {
           int di; Real same_sign;
 
-          // v_xi * F_rho_x1, The diffusion of the i-momentum in x1 direction
-          // Upwind Scheme depends on the sign of F_rho_x1
-          // F_rho_x1 = x1flux(rho_id,k,j,i) is the concentration diffusive flux in x1 direction
+          // Diffusion flux transports advective momenta
           (x1flux(rho_id,k,j,i) >= 0.0) ? di = 1 : di = 0;
-
-          x1flux(v1_id,k,j,i) += 2.0*x1flux(rho_id,k,j,i)*prim_df(v1_id,k,j,i-di);
-          x1flux(v2_id,k,j,i) +=     x1flux(rho_id,k,j,i)*prim_df(v2_id,k,j,i-di);
-          x1flux(v3_id,k,j,i) +=     x1flux(rho_id,k,j,i)*prim_df(v3_id,k,j,i-di);
-
-          // v_x1 * F_rho_i, The advection of the i-diffusive flux in x1 direction
-          // Upwind Scheme depends on the sign of v_x1
-          // We need to interpolate the F_rho_i to cell centers
+          x1flux(v1_id,k,j,i) += x1flux(rho_id,k,j,i)*prim_df(v1_id,k,j,i-di);
+          x1flux(v2_id,k,j,i) += x1flux(rho_id,k,j,i)*prim_df(v2_id,k,j,i-di);
+          x1flux(v3_id,k,j,i) += x1flux(rho_id,k,j,i)*prim_df(v3_id,k,j,i-di);
+          
+          // Advective flux transports diffusive momenta (calculate diffusive velocity at upwind cell center)
           (prim_df(v1_id,k,j,i-1) * prim_df(v1_id,k,j,i) >= 0.0) ? same_sign = 1.0 : same_sign = 0.0;
           //((prim_df(v1_id,k,j,i-1) >= 0.0) && (prim_df(v1_id,k,j,i) >= 0.0)) ? di = 1 : di = 0;
-          ((prim_df(v1_id,k,j,i-1) * prim_df(v1_id,k,j,i)) >= 0.0) ? di = 1 : di = 0;
+          ((prim_df(v1_id,k,j,i-1) + prim_df(v1_id,k,j,i)) >= 0.0) ? di = 1 : di = 0;
 
-          //x1flux(v1_id,k,j,i) += prim_df(v1_id,k,j,i)*x1flux(rho_id,k,j,i-di);
+          x1flux(v1_id,k,j,i) += same_sign*prim_df(v1_id,k,j,i)*x1flux(rho_id,k,j,i-di);
           x1flux(v2_id,k,j,i) += same_sign*prim_df(v1_id,k,j,i)*VanLeerLimiter(x2flux(rho_id,k,j+1,i-di), x2flux(rho_id,k,j,i-di));
           x1flux(v3_id,k,j,i) += same_sign*prim_df(v1_id,k,j,i)*VanLeerLimiter(x3flux(rho_id,k+1,j,i-di), x3flux(rho_id,k,j,i-di));
+
         }
       }
     }
@@ -113,25 +117,21 @@ void DustFluidsDiffusion::DustFluidsMomentumDiffusiveFlux(const AthenaArray<Real
           for (int i=il; i<=iu; ++i) {
             int dj; Real same_sign;
 
-            // v_xi * F_rho_x2, The diffusion of the i-momentum in x2 direction
-            // Upwind Scheme depends on the sign of F_rho_x2
-            // F_rho_x2 = x2flux(rho_id,k,j,i) is the concentration diffusive flux in x2 direction
             (x2flux(rho_id,k,j,i) >= 0.0) ? dj = 1 : dj = 0;
+            x2flux(v1_id,k,j,i) += x2flux(rho_id,k,j,i)*prim_df(v1_id,k,j-dj,i);
+            x2flux(v2_id,k,j,i) += x2flux(rho_id,k,j,i)*prim_df(v2_id,k,j-dj,i);
+            x2flux(v3_id,k,j,i) += x2flux(rho_id,k,j,i)*prim_df(v3_id,k,j-dj,i);
 
-            x2flux(v1_id,k,j,i) +=     x2flux(rho_id,k,j,i)*prim_df(v1_id,k,j-dj,i);
-            x2flux(v2_id,k,j,i) += 2.0*x2flux(rho_id,k,j,i)*prim_df(v2_id,k,j-dj,i);
-            x2flux(v3_id,k,j,i) +=     x2flux(rho_id,k,j,i)*prim_df(v3_id,k,j-dj,i);
+            Real v2_int = 0.5*(prim_df(v2_id,k,j-1,i) + prim_df(v2_id,k,j,i));
+            (v2_int >= 0.0) ? dj = 1 : dj = 0;
+            same_sign = (prim_df(v2_id,k,j-1,i) * prim_df(v2_id,k,j,i) > 0.0) ? 1 : 0;
+            Real mom1_diff = pdf->dfccdif.diff_mom_cc(v1_id, k,j-dj,i); //VanLeerLimiter(x1flux(rho_id,k,j-dj,i+1), x1flux(rho_id,k,j,i)) / prim_df(rho_id,k,j-dj,i);
+            Real mom2_diff = pdf->dfccdif.diff_mom_cc(v2_id, k,j-dj,i); //VanLeerLimiter(x2flux(rho_id,k,j-dj+1,i), x2flux(rho_id,k,j,i)) / prim_df(rho_id,k,j-dj,i);
+            Real mom3_diff = pdf->dfccdif.diff_mom_cc(v3_id, k,j-dj,i); //VanLeerLimiter(x3flux(rho_id,k+1,j-dj,i), x3flux(rho_id,k,j,i)) / prim_df(rho_id,k,j-dj,i);
 
-            // v_x2 * F_rho_i, The advection of the i-diffusive flux in x2 direction
-            // Upwind Scheme depends on the sign of v_x2
-            // We need to interpolate the F_rho_i to cell centers
-            (prim_df(v2_id,k,j-1,i) * prim_df(v2_id,k,j,i) >= 0.0) ? same_sign = 1.0 : same_sign = 0.0;
-            //((prim_df(v2_id,k,j-1,i) >= 0.0) && (prim_df(v2_id,k,j,i) >= 0.0)) ? dj = 1 : dj = 0;
-            ((prim_df(v2_id,k,j-1,i) * prim_df(v2_id,k,j,i)) >= 0.0) ? dj = 1 : dj = 0;
-
-            x2flux(v1_id,k,j,i) += same_sign*prim_df(v2_id,k,j,i)*VanLeerLimiter(x1flux(rho_id,k,j-dj,i+1), x1flux(rho_id,k,j-dj,i));
-            //x2flux(v2_id,k,j,i) += prim_df(v2_id,k,j,i)*x2flux(rho_id,k,j-dj,i);
-            x2flux(v3_id,k,j,i) += same_sign*prim_df(v2_id,k,j,i)*VanLeerLimiter(x3flux(rho_id,k+1,j-dj,i), x3flux(rho_id,k,j-dj,i));
+            x2flux(v1_id,k,j,i) += same_sign * v2_int * mom1_diff;
+            x2flux(v2_id,k,j,i) += same_sign * v2_int * mom2_diff;
+            x2flux(v3_id,k,j,i) += same_sign * v2_int * mom3_diff;
           }
         }
       }
@@ -158,25 +158,21 @@ void DustFluidsDiffusion::DustFluidsMomentumDiffusiveFlux(const AthenaArray<Real
           for (int i=il; i<=iu; ++i) {
             int dk; Real same_sign;
 
-            // v_xi * F_rho_x3, The diffusion of the i-momentum in x3 direction
-            // Upwind Scheme depends on the sign of F_rho_x3
-            // F_rho_x3 = x3flux(rho_id,k,j,i) is the concentration diffusive flux in x3 direction
             (x3flux(rho_id,k,j,i) >= 0.0) ? dk = 1 : dk = 0;
+            x3flux(v1_id,k,j,i) += x3flux(rho_id,k,j,i)*prim_df(v1_id,k-dk,j,i);
+            x3flux(v2_id,k,j,i) += x3flux(rho_id,k,j,i)*prim_df(v2_id,k-dk,j,i);
+            x3flux(v3_id,k,j,i) += x3flux(rho_id,k,j,i)*prim_df(v3_id,k-dk,j,i);
 
-            x3flux(v1_id,k,j,i) +=     x3flux(rho_id,k,j,i)*prim_df(v1_id,k-dk,j,i);
-            x3flux(v2_id,k,j,i) +=     x3flux(rho_id,k,j,i)*prim_df(v2_id,k-dk,j,i);
-            x3flux(v3_id,k,j,i) += 2.0*x3flux(rho_id,k,j,i)*prim_df(v3_id,k-dk,j,i);
+            // Real v3_int = 0.5*(prim_df(v3_id,k-1,j,i) + prim_df(v3_id,k,j,i));
+            // (v3_int >= 0.0) ? dk = 1 : dk = 0;
+            // same_sign = (prim_df(v3_id,k-1,j,i) * prim_df(v3_id,k,j,i) > 0.0) ? 1 : 0;
+            // Real mom1_diff = pdf->dfccdif.diff_mom_cc(v1_id, k-dk,j,i); //VanLeerLimiter(x1flux(rho_id,k-dk,j,i+1), x1flux(rho_id,k,j,i)) / prim_df(rho_id,k-dk,j,i);
+            // Real mom2_diff = pdf->dfccdif.diff_mom_cc(v2_id, k-dk,j,i); //VanLeerLimiter(x2flux(rho_id,k-dk,j+1,i), x2flux(rho_id,k,j,i)) / prim_df(rho_id,k-dk,j,i);
+            // Real mom3_diff = pdf->dfccdif.diff_mom_cc(v3_id, k-dk,j,i); //VanLeerLimiter(x3flux(rho_id,k-dk+1,j,i), x3flux(rho_id,k,j,i)) / prim_df(rho_id,k-dk,j,i);
 
-            // v_x3 * F_rho_i, The advection of the i-diffusive flux in x3 direction
-            // Upwind Scheme depends on the sign of v_x3
-            // We need to interpolate the F_rho_i to cell centers
-            (prim_df(v3_id,k-1,j,i) * prim_df(v3_id,k,j,i) >= 0.0) ? same_sign = 1.0 : same_sign = 0.0;
-            //((prim_df(v3_id,k-1,j,i) >= 0.0) && (prim_df(v3_id,k,j,i) >= 0.0)) ? dk = 1 : dk = 0;
-            ((prim_df(v3_id,k-1,j,i) * prim_df(v3_id,k,j,i)) >= 0.0) ? dk = 1 : dk = 0;
-
-            x3flux(v1_id,k,j,i) += same_sign*prim_df(v3_id,k,j,i)*VanLeerLimiter(x1flux(rho_id,k-dk,j,i+1), x1flux(rho_id,k-dk,j,i));
-            x3flux(v2_id,k,j,i) += same_sign*prim_df(v3_id,k,j,i)*VanLeerLimiter(x2flux(rho_id,k-dk,j+1,i), x2flux(rho_id,k-dk,j,i));
-            //x3flux(v3_id,k,j,i) += prim_df(v3_id,k,j,i)*x3flux(rho_id,k-dk,j,i);
+            // x3flux(v1_id,k,j,i) += same_sign * v3_int * mom1_diff;
+            // x3flux(v2_id,k,j,i) += same_sign * v3_int * mom2_diff;
+            // x3flux(v3_id,k,j,i) += same_sign * v3_int * mom3_diff;
           }
         }
       }

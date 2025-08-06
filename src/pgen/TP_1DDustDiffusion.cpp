@@ -107,8 +107,21 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   return;
 }
 
-void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
-return;
+void MeshBlock::InitUserMeshBlockData(ParameterInput *pin)
+{
+  AllocateUserOutputVariables(11);
+  SetUserOutputVariableName(0, "dif_flx_rho_x1");
+  SetUserOutputVariableName(1, "dif_flx_vx1_x1");
+  SetUserOutputVariableName(2, "dif_flx_vx2_x1");
+  SetUserOutputVariableName(3, "dif_flx_vx3_x1");
+  SetUserOutputVariableName(4, "dif_flx_rho_x2");
+  SetUserOutputVariableName(5, "dif_flx_vx1_x2");
+  SetUserOutputVariableName(6, "dif_flx_vx2_x2");
+  SetUserOutputVariableName(7, "dif_flx_vx3_x2");
+  SetUserOutputVariableName(8, "dif_mom_x1");
+  SetUserOutputVariableName(9, "dif_mom_x2");
+  SetUserOutputVariableName(10,"dif_mom_x3");
+  return;
 }
 
 
@@ -291,6 +304,39 @@ void DiskOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
   }
 }
 
-void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin)
-{
+void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin ){
+  Real rad,phi,z;
+  for(int k=ks; k<=ke; k++) {
+    for(int j=js; j<=je; j++) {
+      for(int i=is; i<=ie; i++) {
+        // Assign full dust diffusion flux in x1
+        Real &dif_flux_rho_x1   = user_out_var(0, k, j, i);
+        dif_flux_rho_x1         = pdustfluids->dfdif.dustfluids_diffusion_flux[X1DIR](0, k, j, i);
+        Real &dif_flux_vx1_x1   = user_out_var(1, k, j, i);
+        dif_flux_vx1_x1         = pdustfluids->dfdif.dustfluids_diffusion_flux[X1DIR](1, k, j, i);
+        Real &dif_flux_vx2_x1   = user_out_var(2, k, j, i);
+        dif_flux_vx2_x1         = pdustfluids->dfdif.dustfluids_diffusion_flux[X1DIR](2, k, j, i);
+        Real &dif_flux_vx3_x1   = user_out_var(3, k, j, i);
+        dif_flux_vx3_x1         = pdustfluids->dfdif.dustfluids_diffusion_flux[X1DIR](3, k, j, i);
+
+        // Assign full dust diffusion flux in x2
+        Real &dif_flux_rho_x2   = user_out_var(4, k, j, i);
+        dif_flux_rho_x2         = pdustfluids->dfdif.dustfluids_diffusion_flux[X2DIR](0, k, j, i);
+        Real &dif_flux_vx1_x2   = user_out_var(5, k, j, i);
+        dif_flux_vx1_x2         = pdustfluids->dfdif.dustfluids_diffusion_flux[X2DIR](1, k, j, i);
+        Real &dif_flux_vx2_x2   = user_out_var(6, k, j, i);
+        dif_flux_vx2_x2         = pdustfluids->dfdif.dustfluids_diffusion_flux[X2DIR](2, k, j, i);
+        Real &dif_flux_vx3_x2   = user_out_var(7, k, j, i);
+        dif_flux_vx3_x2         = pdustfluids->dfdif.dustfluids_diffusion_flux[X2DIR](3, k, j, i);
+        
+        // Assign cel centered diffusive momenta
+        Real &dif_ccflux_x1 = user_out_var(8, k, j, i);
+        dif_ccflux_x1       = pdustfluids->dfccdif.diff_mom_cc(1, k, j, i);
+        Real &dif_ccflux_x2 = user_out_var(9, k, j, i);
+        dif_ccflux_x2       = pdustfluids->dfccdif.diff_mom_cc(2, k, j, i);
+        Real &dif_ccflux_x3 = user_out_var(10, k, j, i);
+        dif_ccflux_x3       = pdustfluids->dfccdif.diff_mom_cc(3, k, j, i);
+      }
+    }
+  }
 }
