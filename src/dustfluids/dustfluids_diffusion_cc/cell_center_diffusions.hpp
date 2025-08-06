@@ -54,6 +54,7 @@ class DustFluidsCellCenterDiffusion {
   DustDiffusionBoundaryVariable diffccbvar;
 
   void CalculateDiffusiveMomentum(const AthenaArray<Real> &prim_df, const AthenaArray<Real> &w);
+  void CalculateDiffusiveMomentum_New(const AthenaArray<Real> &prim_df, const AthenaArray<Real> &w);
 
  private:
   DustFluids  *pmy_dustfluids_; // ptr to DustFluids containing this DustFluidsDiffusion

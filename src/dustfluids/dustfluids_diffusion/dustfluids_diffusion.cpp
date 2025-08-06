@@ -86,7 +86,7 @@ void DustFluidsDiffusion::CalcDustFluidsDiffusionFlux(
 
     // Calculate the cell center diffusive momentum
     pdf->dfccdif.diff_mom_cc.ZeroClear();
-    pdf->dfccdif.CalculateDiffusiveMomentum(prim_df_orb, w_orb);
+    pdf->dfccdif.CalculateDiffusiveMomentum_New(prim_df_orb, w_orb);
   }
 
   return;

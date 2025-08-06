@@ -2501,7 +2501,21 @@ TaskStatus TimeIntegratorTaskList::Primitives(MeshBlock *pmb, int stage) {
                                     ph->w1, pf->bcc, pmb->pcoord,
                                     il, iu, jl, ju, kl, ku);
 
+    //! moved up, so primitive passive scalars (i.e., maximum particle size in TriPoD), is updated for new diffusivity
+    if (NSCALARS > 0) {
+      // r1/r_old for GR is currently unused:
+      pmb->peos->PassiveScalarConservedToPrimitive(ps->s, pdf->df_cons, ps->r, ps->r,
+        pmb->pcoord, il, iu, jl, ju, kl, ku);
+    }
+
     if (NDUSTFLUIDS > 0) {
+      //! Needed to calculate new dust diffusivity and new stopping time
+      Real t_end_stage = pmb->pmy_mesh->time + stage_wghts[(stage-1)].ebeta*pmb->pmy_mesh->dt;
+      //! Handing the conservative (updated) dust variables !!! Primitives used in function declaration !!!
+      pdf->SetDustFluidsProperties(t_end_stage, ph->w, pdf->df_cons, pdf->stopping_time_array, pdf->nu_dustfluids_array, pdf->cs_dustfluids_array);
+      //! Recalculate cell centered diffusive momenta given new diffusivity and updated dust densities (takes df_cons(t+dt))
+      pdf->dfccdif.diff_mom_cc.ZeroClear();
+      pdf->dfccdif.CalculateDiffusiveMomentum_New(pdf->df_cons, ph->w);
       pmb->peos->DustFluidsConservedToPrimitive(pdf->df_cons, pdf->dfccdif.diff_mom_cc,
                                   pdf->df_prim, pdf->df_prim1, pmb->pcoord, il, iu, jl, ju, kl, ku);
     }
@@ -2509,11 +2523,7 @@ TaskStatus TimeIntegratorTaskList::Primitives(MeshBlock *pmb, int stage) {
     if (pmb->porb->orbital_advection_defined) {
       pmb->porb->ResetOrbitalSystemConversionFlag();
     }
-    if (NSCALARS > 0) {
-      // r1/r_old for GR is currently unused:
-      pmb->peos->PassiveScalarConservedToPrimitive(ps->s, pdf->df_cons, ps->r, ps->r,
-        pmb->pcoord, il, iu, jl, ju, kl, ku);
-    }
+
     // fourth-order EOS:
     if (pmb->precon->xorder == 4) {
       // for hydro, shrink buffer by 1 on all sides
