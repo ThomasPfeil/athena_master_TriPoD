@@ -50,6 +50,7 @@ Real mean_size(Real amax, Real amin, Real qd);
 Real eps_bin(int bin, Real amax, Real epstot, Real qd);
 Real dv_turb(Real tau_mx, Real tau_mn, Real t0, Real v0, Real ts, Real vs, Real reynolds);
 Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega);
+Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real dvdr_r, Real dvset);
 void planet_acc_plummer(Real R, Real phi, Real z, Real time, Real* aR, Real* aphi, Real* az);
 void planet_acc_power(Real R, Real phi, Real z, Real time, Real* aR, Real* aphi, Real* az);
 void dust_pert_eq_pow_BL19(Real rad, Real phi, Real z, Real St0, Real St1, Real eps0, Real eps1, Real* vrg, Real* vphig, Real* vrd0, Real* vphid0, Real* vrd1, Real* vphid1);
@@ -79,7 +80,7 @@ Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
 Real sfac, afac;
-bool beta_cool, dust_cool, ther_rel, isotherm, MMSN, coag, infall, damping, planet, planet_power, Benitez, ind_term;
+bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile;
 } // namespace
 
 // User-defined boundary conditions for disk simulations
@@ -104,19 +105,19 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 //========================================================================================
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
-  // Get switches for different physics
-  MMSN   = pin->GetBoolean("problem","MMSN");
   ther_rel     = pin->GetBoolean("problem","therm_relax");
   beta_cool    = pin->GetBoolean("problem","beta_cool");
   dust_cool    = pin->GetBoolean("problem","dust_cool");
   isotherm     = pin->GetBoolean("problem","isotherm");
- coag         = pin->GetBoolean("problem","coag");
+  coag         = pin->GetBoolean("problem","coag");
   infall       = pin->GetBoolean("problem","infall");
   planet       = pin->GetBoolean("problem","planet");
   planet_power = pin->GetBoolean("problem","planet_power");
   damping      = pin->GetBoolean("problem","damping");
   Benitez      = pin->GetBoolean("problem","Benitez");
   ind_term     = pin->GetBoolean("problem","ind_term");
+  power_law    = pin->GetBoolean("problem","power_law");
+  eps_profile  = pin->GetBoolean("problem","eps_profile");
 
   // Get parameters for gravitatonal potential of central point mass
   au         = 1.495978707e13; // astronomical unit
@@ -164,15 +165,25 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   afac  = 0.4;
   sfac  = 8.0;
+
   // Define the code units - needed for Stokes number calculation
-  unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar);  // column density at rchar
-  if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0)
-    if(!MMSN)
-      unit_rho = unit_sig;
+  if(power_law)
+    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar) * pow(au/rchar, pSig) * exp(-pow(au/rchar, 2.+pSig));
+  else 
+    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar);
+
+  if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0){
+    if(power_law)
+      unit_rho = unit_sig*std::pow(r0/au, pSig);
     else
-      unit_rho = 1700.*std::pow(r0/au, pSig);
-  else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0)
-    unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(rchar/au, 0.5*(q + 3.0))); // unit density (density at r0)
+      unit_rho = unit_sig;
+  } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
+    if(power_law)
+      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(r0/au, 0.5*(q + 3.0))); 
+    else 
+      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(rchar/au, 0.5*(q + 3.0))); 
+  }
+
   unit_len  = r0;
   unit_time = 1./std::sqrt(ms * G / std::pow(unit_len,3.0));
   unit_vel  = unit_len/unit_time;
@@ -271,7 +282,11 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         a1 = mean_size(aint,  amax, q_dust); 
         a0 = mean_size(a_min, aint, q_dust);
         
-        sigma = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+        if(power_law){
+          sigma   = std::pow(rad*au/r0, pSig) * unit_sig;
+        } else {
+          sigma   = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+        }
         St0 = Stokes_int(a0, sigma, afac);
         St1 = Stokes_int(a1, sigma, afac);
         
@@ -350,7 +365,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           a1 = mean_size(aint,  amax, q_dust); 
           a0 = mean_size(a_min, aint, q_dust);
           
-          sigma = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+          if(power_law){
+            sigma   = std::pow(rad*au/r0, pSig) * unit_sig;
+          } else {
+            sigma   = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+          }
           St0 = Stokes_int(a0, sigma, afac);
           St1 = Stokes_int(a1, sigma, afac);
           
@@ -358,7 +377,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           rhod0 = DenProfileCyl_dust(rad, phi, z, St0, eps0);
           rhod1 = DenProfileCyl_dust(rad, phi, z, St1, eps1);
 
-          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 2e-5 : a_max_ini;
+          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 1e-4 : a_max_ini;
 
           int dust_id = 0;
           int rho_id  = 4*dust_id;
@@ -418,13 +437,17 @@ Real DenProfileCyl(const Real rad, const Real phi, const Real z) {
   cs  = SspeedProfileCyl(rad, phi, z);                                        // speed of sound
   h   = cs * std::pow(rad,1.5);
   if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
-    if(!MMSN)
-      den = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig));   // Lynden-Bell and Pringle (1974) profile
+    if(power_law)
+      den = std::pow(rad*au/r0, pSig); // Column density profile
     else
-      den = std::pow(rad, pSig); // Column density profile
+      den = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig));   // Lynden-Bell and Pringle (1974) profile
   }else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
-    den = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
-        * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));  // vertical structure          
+    if(power_law){
+      den = std::pow(rad*au/r0, prho) * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0)); 
+    } else {
+      den = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
+              * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));  // vertical structure          
+    }
   }
   return std::max(den,dfloor);
 }
@@ -436,12 +459,23 @@ Real DenProfileCyl_dust(const Real rad, const Real phi, const Real z, Real St, R
   cs  = SspeedProfileCyl(rad, phi, z);                                      // speed of sound
   h   = cs * std::pow(rad,1.5);                                             // pressure scale height
   Hd  = h * std::sqrt(delta_ini/(St+delta_ini)) * unit_len;
-  Sig = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
-  den_g = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
+  if(power_law){
+    Sig   = std::pow(rad*au/r0, pSig) * unit_sig;
+    den_g = std::pow(rad*au/r0, prho) * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));    // vertical structure
+  } else {
+    Sig   = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig)) * unit_sig;
+    den_g = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
         * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));    // vertical structure
-  rhod_mid = eps*Sig / (std::sqrt(2.*PI) * Hd) / unit_rho;
-  // den = rhod_mid * std::exp(SQR(rad*unit_len/Hd) * (rad / std::sqrt(SQR(rad)+SQR(z)) - 1.0)); // const St solution
-  den = rhod_mid * std::exp(-St/delta_ini*(std::exp(0.5*SQR(z/h)) - 1.) - 0.5*SQR(z/h)); // constant amax solution
+  }
+  
+  if(eps_profile){
+    rhod_mid = eps*Sig / (std::sqrt(2.*PI) * Hd) / unit_rho;
+    // den = rhod_mid * std::exp(SQR(rad*unit_len/Hd) * (rad / std::sqrt(SQR(rad)+SQR(z)) - 1.0)); // const St solution
+    den = rhod_mid * std::exp(-St/delta_ini*(std::exp(0.5*SQR(z/h)) - 1.) - 0.5*SQR(z/h)); // constant amax solution
+  } else {
+    den = eps * den_g; // constant amax solution
+  }
+  
   eps_ = den/den_g;
   return std::sqrt(SQR(eps_floor) + SQR(eps_)) * den_g;
 }
@@ -460,16 +494,21 @@ Real VelProfileCyl(const Real rad, const Real phi, const Real z) {
   cs  = SspeedProfileCyl(rad, phi, z); // speed of sound
   h   = cs * std::pow(rad,1.5);        // pressure scale height
   if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0){
-    if(!MMSN){
-      vel = std::sqrt(1.0/rad) * std::sqrt(1.0 + SQR(h/rad)*(pSig+q-(2.0+pSig)*std::pow(rad/rc, 2.0+pSig)));
+    if(power_law){
+      vel = std::sqrt(1.0/rad) * std::sqrt(1.0 + (pSig+q)*SQR(h/rad));
     }
     else{
-      vel = std::sqrt(1.0/rad) * std::sqrt(1.0 + (pSig+q)*SQR(h/rad));
+      vel = std::sqrt(1.0/rad) * std::sqrt(1.0 + SQR(h/rad)*(pSig+q-(2.0+pSig)*std::pow(rad/rc, 2.0+pSig)));
     }
   }
   else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
-    vel =  std::sqrt(1.0/rad)       // Keplerian velocity
-        * std::sqrt((1.0+q) - q*rad/std::sqrt(SQR(rad)+SQR(z)) + (prho+q-(2.0+pSig)*std::pow(rad/rc, 2.0+pSig))*SQR(h/rad));
+    if(power_law){
+      vel =  std::sqrt(1.0/rad)       // Keplerian velocity
+              * std::sqrt((1.0+q) - q*rad/std::sqrt(SQR(rad)+SQR(z)) + (prho+q)*SQR(h/rad));
+    } else {
+      vel =  std::sqrt(1.0/rad)       // Keplerian velocity
+              * std::sqrt((1.0+q) - q*rad/std::sqrt(SQR(rad)+SQR(z)) + (prho+q-(2.0+pSig)*std::pow(rad/rc, 2.0+pSig))*SQR(h/rad));    
+    }
   }
   vel -= rad*Omega0;
   return vel;
@@ -648,7 +687,8 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z)
 
   // ------------ Settling --------------------
   Real H = cs/omega;
-  dvset = std::min(z * St_mx * omega, cs) - std::min(z * St_mn * omega, cs); 
+  // dvset = std::min(z * St_mx * omega, cs) - std::min(z * St_mn * omega, cs); 
+  dvset = std::fabs((St_mx/(St_mx+1.) - St_mn/(St_mn+1.))*z) * omega;
 
   // ------------ Drift -------------
   vdrmax   = - 0.5 * H*H * omega/(rhog*cs*cs) * dp;
@@ -657,6 +697,60 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z)
 
   return std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi));
 }
+
+
+Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real dvdr_r, Real dvset){
+  //! ***********************************************************************
+  //! Calculates the total relative velocity of particles of sizes a_0 and a_1
+  //!
+  //!    INPUT:   a_0    =   size 1 (all cgs)
+  //!             a_1    =   size 2
+  //!             dp     =   radial pressure gradient
+  //!             rhog   =   gas density
+  //!             cs     =   soundspeed
+  //!             omega  =   Kepler frequency
+  //!
+  //!    RETURNS: dv =   relative velocity
+  //!
+  //! ************************************************************************
+  // ------------ Turbulent velocities --------------
+  Real Re    = alpha_turb * 2e-15 * rhog * cs / omega / (mp * mue);
+  Real vn    = std::sqrt(alpha_turb)*cs;
+  Real vs    = vn * std::pow(Re,-0.25);
+  Real tn    = 1/omega;
+  Real ts    = tn * std::pow(Re,-0.5);
+  Real tau_f = rho_m / (std::sqrt(8.0/PI)*cs * rhog);
+  Real tau_0 = tau_f*a_0;
+  Real tau_1 = tau_f*a_1;
+  Real tau_mx, tau_mn, St_mx, St_mn, Stmx2p1, Stmn2p1;
+  Real dvtr, vdrmax, dvBr, dvdr_phi;
+  if (tau_0 > tau_1){
+      tau_mx = tau_0;
+      tau_mn = tau_1;
+  }
+  else{
+      tau_mx = tau_1;
+      tau_mn = tau_0;
+  }
+  St_mn = tau_mn*omega;
+  St_mx = tau_mx*omega;
+  Stmx2p1 = St_mx*St_mx + 1.;
+  Stmn2p1 = St_mn*St_mn + 1.;
+  dvtr = dv_turb(tau_mx, tau_mn, tn, vn, ts, vs, Re);
+
+  // ------------ Brownian Motion -------------
+  Real m1 = 4./3. * PI * std::pow(a_1, 3.0) * rho_m;
+  dvBr = std::sqrt(16.0 * cs*cs * mp * mue/(PI*m1));
+
+  Real H = cs/omega;
+
+  // ------------ Azimuthal Drift -------------
+  vdrmax   = - 0.5 * H*H * omega/(rhog*cs*cs) * dp;
+  dvdr_phi = std::fabs(vdrmax * (Stmx2p1-Stmn2p1)/(Stmx2p1*Stmn2p1));
+
+  return std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi));
+}
+
 
 Real deps1da(Real epstot, Real amax, Real p)
 {
@@ -691,8 +785,8 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
         a0 = mean_size(a_min, a_int, q_d);
         a1 = mean_size(a_int,  amax, q_d);
         
-        St0 = Stokes_vol(a0, prim(IDN,k,j,i), cs, om, afac);
-        St1 = Stokes_vol(a1, prim(IDN,k,j,i), cs, om, afac);
+        St0 = Stokes_vol(a0, prim(IDN,k,j,i), cs, om, 1.0);
+        St1 = Stokes_vol(a1, prim(IDN,k,j,i), cs, om, 1.0);
 
         // printf("%.3e %.3e %.3e %.3e %.3e %.3e %.3e %.3e \n", rad,phi,z,amax, a0, a1, St0, St1);
 
@@ -914,10 +1008,13 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           m0    = 4./3.*PI*rho_m*std::pow(a0,3.0);
           m1    = 4./3.*PI*rho_m*std::pow(a1,3.0);
           // --------- Relative Grain Velocities ----------
-          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i)) + SQR(afac*prim_df(6,k,j,i)*unit_vel)); // + SQR(afac*prim_df(5,k,j,i)*unit_vel)                      ;
-          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i))     + SQR(afac*prim_df(6,k,j,i)*unit_vel)); // + SQR(afac*prim_df(5,k,j,i)*unit_vel);
-          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i); //std::sqrt(SQR(dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i))          + SQR((prim_df(2,k,j,i) - prim_df(6,k,j,i))*unit_vel)); //+ SQR((prim_df(1,k,j,i) - prim_df(5,k,j,i))*unit_vel);
-          // ------------------ // relative turbulent velocity                             // relative radial drift                               // relative settling 
+          // dvmax = dv_tot_bulk(afac*amax, amax, dPdr, rho, cs_i, Om_i, unit_vel * afac*std::fabs(prim_df(5,k,j,i)),             unit_vel * afac*std::fabs(prim_df(6,k,j,i))); //dv_tot(afac*amax, amax, dPdx, rho, cs_i, Om_i);
+          // dv11  = dv_tot_bulk(afac*a1,   a1,   dPdr, rho, cs_i, Om_i, unit_vel * afac*std::fabs(prim_df(5,k,j,i)),             unit_vel * afac*std::fabs(prim_df(6,k,j,i)));
+          // dv01  = dv_tot_bulk(a0,        a1,   dPdr, rho, cs_i, Om_i, unit_vel * std::fabs(prim_df(5,k,j,i)-prim_df(1,k,j,i)), unit_vel * std::fabs(prim_df(6,k,j,i))-prim_df(2,k,j,i));
+          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i);
+          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i); 
+          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i); 
+        
 
           //--------------------------------------------------------------------------------------
           //               Determine the coagulation and fragmentation parameters
@@ -944,8 +1041,8 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           vdrmax   = - 0.5 / (rho*Om_i) * dPdr;
           dvdr_r   = std::fabs(2.*vdrmax * (St_mx/Stmx2p1 - St_mn/Stmn2p1));
           dvdr_phi = std::fabs(vdrmax * (Stmx2p1-Stmn2p1)/(Stmx2p1*Stmn2p1));
-          dv_set   = z_i * (std::min(St_mx, 0.5) - std::min(St_mn, 0.5)) * Om_i; 
-          vtr_vdr  = std::pow(0.3*vtr_simp/std::max(std::sqrt(SQR(dvdr_r) + SQR(dvdr_phi) + SQR(dv_set)),TINY_NUMBER), 6.0);
+          // dv_set   = z_i * (std::min(St_mx, 0.5) - std::min(St_mn, 0.5)) * Om_i; 
+          vtr_vdr  = std::pow(0.3*vtr_simp/std::max(std::sqrt(SQR(dvdr_r) + SQR(dvdr_phi)),TINY_NUMBER), 6.0);
           pdr      = 0.5*((1-vtr_vdr)/(1+vtr_vdr)) + 0.5;
 
           // --------- Resulting power law exponent xi -------
@@ -985,7 +1082,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             tau     = fabs(eps1/epsdot_); // respective timescale
 
             // Shrink amax on this timescale
-            adot_    = std::min(0.0, amax/tau * (1-amax/2e-5));
+            adot_    = std::min(0.0, amax/tau * (1-amax/1e-4));
             adot     += adot_ * adot_max / sqrt(adot_ * adot_  + adot_max* adot_max);
 
             // We want to keep our power law, so we move mass accordingly
@@ -1043,7 +1140,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                 AthenaArray<Real> &prim_df, FaceField &b, Real time, Real dt,
                 int il, int iu, int jl, int ju, int kl, int ku, int ngh) {
   Real rad(0.0), phi(0.0), z(0.0);
-  Real cs, vel, den, fr, amax, afr, eps;
+  Real cs, vel, den, fr, amax, afr, eps, aint, eps0, eps1;
   int rho_id, v1_id, v2_id, v3_id, dust_id;
   OrbitalVelocityFunc &vK = pmb->porb->OrbitalVelocity;
   if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0) {
@@ -1064,14 +1161,16 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           if (NON_BAROTROPIC_EOS)
             prim(IEN,k,j,il-i) = SQR(cs)*den;
           if (NDUSTFLUIDS > 0){
-            amax = 2e-5;
+            amax = pmb->pscalars->r(0,k,j,il);
+            aint = std::sqrt(amax*a_min);
 
             dust_id = 0;
             rho_id  = 4*dust_id;
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id, k, j, il-i) = prim_df(rho_id, k, j, il);
+            eps0   = prim_df(rho_id, k, j, il)/prim(IDN,k,j,il);
+            prim_df(rho_id, k, j, il-i) = den * eps0;
             prim_df(v1_id,k,j,il-i) = prim_df(v1_id,k,j,il);
             prim_df(v2_id,k,j,il-i) = prim_df(v2_id,k,j,il);
             prim_df(v3_id,k,j,il-i) = vel;
@@ -1081,7 +1180,8 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id, k, j, il-i) = prim_df(rho_id, k, j, il);
+            eps1   = prim_df(rho_id, k, j, il)/prim(IDN,k,j,il);
+            prim_df(rho_id, k, j, il-i) = den * eps1;
             prim_df(v1_id,k,j,il-i) = prim_df(v1_id,k,j,il);
             prim_df(v2_id,k,j,il-i) = prim_df(v2_id,k,j,il);
             prim_df(v3_id,k,j,il-i) = vel;
@@ -1206,7 +1306,7 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id,k,jl-j,i) = prim_df(rho_id,k,jl+j-1,i);
+            prim_df(rho_id,k,jl-j,i) = 0.0; //prim_df(rho_id,k,jl+j-1,i);
             prim_df(v1_id,k,jl-j,i) = prim_df(v1_id,k,jl+j-1,i);
             prim_df(v2_id,k,jl-j,i) = -prim_df(v2_id,k,jl+j-1,i);
             prim_df(v3_id,k,jl-j,i) = vel;
@@ -1260,19 +1360,19 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
             prim_df(rho_id,k,ju+j,i) = prim_df(rho_id,k,ju-j+1,i);
-            prim_df(v1_id,k,ju+j,i) = prim_df(v1_id,k,ju-j+1,i);
-            prim_df(v2_id,k,ju+j,i) = -prim_df(v2_id,k,ju-j+1,i);
-            prim_df(v3_id,k,ju+j,i) = vel;
+            prim_df(v1_id,k,ju+j,i)  = prim_df(v1_id,k,ju-j+1,i);
+            prim_df(v2_id,k,ju+j,i)  = -prim_df(v2_id,k,ju-j+1,i);
+            prim_df(v3_id,k,ju+j,i)  = vel;
 
             dust_id = 1;
             rho_id  = 4*dust_id;
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id,k,ju+j,i) = prim_df(rho_id,k,ju-j+1,i);
-            prim_df(v1_id,k,ju+j,i) = prim_df(v1_id,k,ju-j+1,i);
-            prim_df(v2_id,k,ju+j,i) = -prim_df(v2_id,k,ju-j+1,i);
-            prim_df(v3_id,k,ju+j,i) = vel;
+            prim_df(rho_id,k,ju+j,i) = 0.0; //prim_df(rho_id,k,ju-j+1,i);
+            prim_df(v1_id,k,ju+j,i)  = prim_df(v1_id,k,ju-j+1,i);
+            prim_df(v2_id,k,ju+j,i)  = -prim_df(v2_id,k,ju-j+1,i);
+            prim_df(v3_id,k,ju+j,i)  = vel;
 
             if(NSCALARS == 1){
               pmb->pscalars->r(0,k,ju+j,i) = amax;
