@@ -49,7 +49,7 @@ Real log_size(int n, Real amax, Real amin);
 Real mean_size(Real amax, Real amin, Real qd);
 Real eps_bin(int bin, Real amax, Real epstot, Real qd);
 Real dv_turb(Real tau_mx, Real tau_mn, Real t0, Real v0, Real ts, Real vs, Real reynolds);
-Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega);
+Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real vgas);
 Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real dvdr_r, Real dvset);
 void planet_acc_plummer(Real R, Real phi, Real z, Real time, Real* aR, Real* aphi, Real* az);
 void planet_acc_power(Real R, Real phi, Real z, Real time, Real* aR, Real* aphi, Real* az);
@@ -80,7 +80,7 @@ Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
 Real sfac, afac;
-bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile;
+bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile, use_alpha_av;
 } // namespace
 
 // User-defined boundary conditions for disk simulations
@@ -118,6 +118,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   ind_term     = pin->GetBoolean("problem","ind_term");
   power_law    = pin->GetBoolean("problem","power_law");
   eps_profile  = pin->GetBoolean("problem","eps_profile");
+  use_alpha_av = pin->GetBoolean("problem","use_alpha_av");
 
   // Get parameters for gravitatonal potential of central point mass
   au         = 1.495978707e13; // astronomical unit
@@ -230,10 +231,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   // User-defined output variables
-  AllocateUserOutputVariables(2);
+  AllocateUserOutputVariables(3);
 
   // Store initial condition and maximum particle size for internal use
-  AllocateRealUserMeshBlockDataField(5); // rhog, cs, vphi, trelax
+  AllocateRealUserMeshBlockDataField(6); // rhog, cs, vphi, trelax
   Real orb_defined;
   (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
   OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
@@ -247,6 +248,7 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   ruser_meshblock_data[2].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // azimuthal velocity
   ruser_meshblock_data[3].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // power law exponent
   ruser_meshblock_data[4].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // trelax
+  ruser_meshblock_data[5].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
 
   Real den, cs, vg_phi, rad, phi, z, x1, x2, x3;
   Real amean, St_mid, OmK, eps, den_dust, den_mid, as, sig_s, ns, tcool, rhod_tot, amax, q_d, aint, eps0, eps1, rhod0, rhod1, a0, a1, sigma, St0, St1;
@@ -259,9 +261,9 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         x1 = pcoord->x1v(i);
 
         // Calculate initial condition
-        GetCylCoord(pcoord,rad,phi,z,i,j,0);
+        GetCylCoord(pcoord,rad,phi,z,i,j,k);
         den    = DenProfileCyl(rad,phi,z);
-        cs     = SspeedProfileCyl(rad, phi, z);
+        cs     = SspeedProfileCyl(rad,phi,z);
         vg_phi = VelProfileCyl(rad,phi,z);
         if (porb->orbital_advection_defined)
           vg_phi -= vK(porb, x1, x2, x3);
@@ -642,7 +644,7 @@ Real dv_turb(Real tau_mx, Real tau_mn, Real t0, Real v0, Real ts, Real vs, Real 
     return std::sqrt(v_rel_ormel);
 }
 
-Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z){
+Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z, Real vgas){
   //! ***********************************************************************
   //! Calculates the total relative velocity of particles of sizes a_0 and a_1
   //!
@@ -657,8 +659,13 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z)
   //!
   //! ************************************************************************
   // ------------ Turbulent velocities --------------
-  Real Re    = alpha_turb * 2e-15 * rhog * cs / omega / (mp * mue);
-  Real vn    = std::sqrt(alpha_turb)*cs;
+  Real alpha_av;
+  if(use_alpha_av == false)
+    alpha_av = alpha_turb;
+  else
+    alpha_av = SQR(vgas/cs);
+  Real Re    = alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
+  Real vn    = std::sqrt(alpha_av)*cs;
   Real vs    = vn * std::pow(Re,-0.25);
   Real tn    = 1/omega;
   Real ts    = tn * std::pow(Re,-0.5);
@@ -893,6 +900,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
        eps1_, epsdot_, tau, adot_, depsa; // shrinkage term 
   Real tcool, cs2_old, cs2_eq, cs2_new, e_kin;
   Real th_in_b, th_out_b, f_in, f_out, f_tot, dampterm, vphi;
+  Real vphi0, rho0;
   int rho_id, v1_id, v2_id, v3_id;
     
 
@@ -946,11 +954,38 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 
           f_in  =  std::max(0.0, (th_in_b - pmb->pcoord->x2v(j)))  / (TINY_NUMBER+dsize) / std::sqrt(t_damp);
           f_out =  std::max(0.0, (pmb->pcoord->x2v(j) - th_out_b)) / (TINY_NUMBER+dsize) / std::sqrt(t_damp);
-
-          vphi = pmb->ruser_meshblock_data[2](j, i); //VelProfileCyl(rad,phi,z);
+          
+          rho0  = pmb->ruser_meshblock_data[0](k, j, i);
+          vphi0 = pmb->ruser_meshblock_data[2](k, j, i); //VelProfileCyl(rad,phi,z);
+          eps0  = cons_df(0,k,j,i)/cons(IDN,k,j,i);
+          eps1  = cons_df(4,k,j,i)/cons(IDN,k,j,i);
+          if(NSCALARS==1){
+            amax  = cons_s(0,k,j,i)/cons_df(4,k,j,i);
+          }
 
           f_tot = f_in + f_out;
           dampterm = std::exp(- dt * f_tot*f_tot / std::pow(rad, 1.5));
+
+          // damping gas
+          e_kin = .5/cons(IDN,k,j,i)*(SQR(cons(IM1,k,j,i))+SQR(cons(IM2,k,j,i))+SQR(cons(IM3,k,j,i)));
+          cs2_old = (cons(IEN,k,j,i) - e_kin)*(gamma_gas-1.)/cons(IDN,k,j,i);    // store soundspeed before damping
+          // cs2_eq  = SQR(cs_iso); // equilibrium soundspeed^2 (temperature)
+          cons(IDN,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0);
+          cons(IM1,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)* prim(IVX,k,j,i);
+          cons(IM2,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)* prim(IVY,k,j,i);
+          cons(IM3,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)* (prim(IVZ,k,j,i) - vphi0);
+          
+          cons(IEN,k,j,i) = cs2_old*cons(IDN,k,j,i)/(gamma_gas - 1.0); // keep thermal energy constant
+          cons(IEN,k,j,i) -= cons(IDN,k,j,i)/(gamma_gas-1.0) * (1.-dampterm) * (cs2_old-cs2_eq); // damp energy
+          cons(IEN,k,j,i) += 0.5*(SQR(cons(IM1,k,j,i))+SQR(cons(IM2,k,j,i)) // add kinetic energy
+                                      + SQR(cons(IM3,k,j,i)))/cons(IDN,k,j,i);
+          
+          // damping dust
+          cons_df(0,k,j,i) = cons(IDN,k,j,i)*eps0;
+          cons_df(4,k,j,i) = cons(IDN,k,j,i)*eps1;
+          if(NSCALARS==1) {
+            cons_s(0,k,j,i) = amax * cons_df(4,k,j,i); //conserve particle size while damping
+          }
           for (int n=0; n<NDUSTFLUIDS; ++n) {
             // damping dust
             rho_id  = 4*n;
@@ -959,7 +994,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
             v3_id   = rho_id + 3;
             cons_df(v1_id,k,j,i) -= (1.-dampterm) * (cons_df(v1_id, k,j,i));
             cons_df(v2_id,k,j,i) -= (1.-dampterm) * (cons_df(v2_id, k,j,i));
-            cons_df(v3_id,k,j,i) -= (1.-dampterm) * (cons_df(v3_id, k,j,i) - vphi * cons_df(rho_id,k,j,i));
+            cons_df(v3_id,k,j,i) -= (1.-dampterm) * (cons_df(v3_id, k,j,i) - vphi0 * cons_df(rho_id,k,j,i));
           }
         }
 
@@ -1011,9 +1046,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           // dvmax = dv_tot_bulk(afac*amax, amax, dPdr, rho, cs_i, Om_i, unit_vel * afac*std::fabs(prim_df(5,k,j,i)),             unit_vel * afac*std::fabs(prim_df(6,k,j,i))); //dv_tot(afac*amax, amax, dPdx, rho, cs_i, Om_i);
           // dv11  = dv_tot_bulk(afac*a1,   a1,   dPdr, rho, cs_i, Om_i, unit_vel * afac*std::fabs(prim_df(5,k,j,i)),             unit_vel * afac*std::fabs(prim_df(6,k,j,i)));
           // dv01  = dv_tot_bulk(a0,        a1,   dPdr, rho, cs_i, Om_i, unit_vel * std::fabs(prim_df(5,k,j,i)-prim_df(1,k,j,i)), unit_vel * std::fabs(prim_df(6,k,j,i))-prim_df(2,k,j,i));
-          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i);
-          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i); 
-          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i); 
+          dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER);
+          dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER); 
+          dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER); 
         
 
           //--------------------------------------------------------------------------------------
@@ -1034,7 +1069,10 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           St_mn    = afac*St_mx;
           Stmx2p1  = SQR(St_mx) + 1.;
           Stmn2p1  = SQR(St_mn) + 1.;
-          vgas     = std::sqrt(alpha_turb)*cs_i;
+          if(use_alpha_av == false)
+            vgas = std::sqrt(alpha_turb)*cs_i;
+          else    
+            vgas = pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER;
           vsmall   = vgas * std::sqrt((St_mx-St_mn)/(St_mx+St_mn) * (SQR(St_mx)/(St_mx+pow(Re,-0.5)) - SQR(St_mn)/(St_mn+pow(Re,-0.5))));
           vinter   = vgas * std::sqrt(2.292*St_mx);
           vtr_simp = psmall*vsmall + pint*vinter;
@@ -1342,8 +1380,8 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           den = pmb->ruser_meshblock_data[0](k,ju+j,i);
           cs  = pmb->ruser_meshblock_data[1](k,ju+j,i);
           vel = pmb->ruser_meshblock_data[2](k,ju+j,i);
-          if (pmb->porb->orbital_advection_defined)
-            vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(ju+j), pco->x3v(k));
+          // if (pmb->porb->orbital_advection_defined)
+          //   vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(ju+j), pco->x3v(k));
           prim(IM1,k,ju+j,i) = prim(IM1,k,ju-j+1,i);
           prim(IM2,k,ju+j,i) = -prim(IM2,k,ju-j+1,i);
           prim(IM3,k,ju+j,i) = vel;
@@ -1389,7 +1427,7 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 }
 
 void MeshBlock::UserWorkInLoop() {
-  Real rad,phi,z,eps,q_d,amax,aint,as,sig_s,ns,tcool,rhod_tot,cs;
+  Real rad,phi,z,eps,q_d,amax,aint,as,sig_s,ns,tcool,rhod_tot,cs,vr_av,vth_av,vphi_av,rho_av,dV,vtot_rms;
     for (int j=js; j<=je; ++j) {
       for (int i=is; i<=ie; ++i) {
         for (int k=ks; k<=ke; ++k) {
@@ -1407,15 +1445,38 @@ void MeshBlock::UserWorkInLoop() {
           ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
           tcool = std::min(1000., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
 
+          vr_av   = 0.;
+          vth_av  = 0.;
+          vphi_av = 0.;
+          rho_av  = 0.;
+          for(int iloc=i-1; iloc<=i+1; iloc++){
+            for(int jloc=j-1; jloc<=j+1; jloc++){
+              for(int kloc=k-1; kloc<=k+1; kloc++){
+                dV = pcoord->GetCellVolume(kloc,jloc,iloc);
+                vr_av   += phydro->u(IM1,kloc,jloc,iloc)*dV;
+                vth_av  += phydro->u(IM2,kloc,jloc,iloc)*dV;
+                vphi_av += phydro->u(IM3,kloc,jloc,iloc)*dV;
+                rho_av  += phydro->u(IDN,kloc,jloc,iloc)*dV;
+              }
+            }
+          }
+          vr_av   /= rho_av; // mass-averaged velocity of the 27 cells
+          vth_av  /= rho_av; // mass-averaged velocity of the 27 cells
+          vphi_av /= rho_av; // mass-averaged velocity of the 27 cells
+          vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i) - vr_av)
+                             + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i) - vth_av)
+                             + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - vphi_av)); // rms local deviation from surruounding average
+
           ruser_meshblock_data[3](k,j,i) = q_d;
           ruser_meshblock_data[4](k,j,i) = tcool;
+          ruser_meshblock_data[5](k,j,i) = vtot_rms;
         }
       }
     }
   return;
 }
 
-void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin ){
+void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin){
   Real rad,phi,z;
   for(int k=ks; k<=ke; k++) {
     for(int j=js; j<=je; j++) {
@@ -1423,6 +1484,7 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin ){
         GetCylCoord(pcoord, rad,phi,z, i,j,k);
         user_out_var(0,k,j,i) = ruser_meshblock_data[3](k,j,i);
         user_out_var(1,k,j,i) = ruser_meshblock_data[4](k,j,i) * std::pow(rad,-1.5);
+        user_out_var(2,k,j,i) = ruser_meshblock_data[5](k,j,i);
       }
     }
   }
