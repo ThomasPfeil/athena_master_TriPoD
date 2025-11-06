@@ -115,7 +115,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
 
           Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
           F    = nu_face*rhod_face*dprim_r_dx;
-          Chi  = std::fabs(F/Fmax);
+          Chi  = std::fabs(F/(Fmax+TINY_NUMBER));
           lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
           x1flux(n,k,j,i) -= lam*F;
@@ -162,7 +162,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
 
             Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
             F    = nu_face*rhod_face*dprim_r_dy;
-            Chi  = std::fabs(F/Fmax);
+            Chi  = std::fabs(F/(Fmax+TINY_NUMBER));
             lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
             x2flux(n,k,j,i) -= lam*F; // flux = D*rhod * grad(c)
@@ -211,7 +211,7 @@ void PassiveScalars::DiffusiveFluxIso(const AthenaArray<Real> &prim_r,
 
             Fmax = std::sqrt(nu_scalar_iso[n]*pr_face/rho_face) * rhod_face*scalar_face;
             F    = nu_face*rhod_face*dprim_r_dz;
-            Chi  = std::fabs(F/Fmax);
+            Chi  = std::fabs(F/(Fmax+TINY_NUMBER));
             lam  = (1+Chi)/(1+Chi+SQR(Chi));
 
             x3flux(n,k,j,i) -= lam*F;
