@@ -801,13 +801,19 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
           std::exit(EXIT_FAILURE);
         }
 
-        // printf("%.3e %.3e %.3e %.3e %.3e %.3e %.3e %.3e \n", rad,phi,z,amax, a0, a1, St0, St1);
+        if(prim_df(4,k,j,i)/prim(IDN,k,j,i)>eps_floor && prim_df(0,k,j,i)/prim(IDN,k,j,i)>eps_floor){
+          Real &st_time_0 = stopping_time(0, k, j, i);
+          st_time_0 = St0/om;
 
-        Real &st_time_0 = stopping_time(0, k, j, i);
-        st_time_0 = St0/om;
+          Real &st_time_1 = stopping_time(1, k, j, i);
+          st_time_1 = St1/om;
+        } else {
+          Real &st_time_0 = stopping_time(0, k, j, i);
+          st_time_0 = std::min(1e-3, St0)/om;
 
-        Real &st_time_1 = stopping_time(1, k, j, i);
-        st_time_1 = St1/om;
+          Real &st_time_1 = stopping_time(1, k, j, i);
+          st_time_1 = std::min(1e-3, St1)/om;
+        }
       }
     }
   }
