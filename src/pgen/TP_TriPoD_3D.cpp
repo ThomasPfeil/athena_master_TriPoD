@@ -379,7 +379,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
           rhod0 = DenProfileCyl_dust(rad, phi, z, St0, eps0);
           rhod1 = DenProfileCyl_dust(rad, phi, z, St1, eps1);
 
-          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 1e-4 : a_max_ini;
+          amax = (fabs(rhod1/den-eps_floor)<1e-5*eps_floor) ? 8e-5 : a_max_ini;
 
           int dust_id = 0;
           int rho_id  = 4*dust_id;
@@ -445,10 +445,11 @@ Real DenProfileCyl(const Real rad, const Real phi, const Real z) {
       den = std::pow(rad/rc, pSig) * std::exp(-std::pow(rad/rc, 2.0+pSig));   // Lynden-Bell and Pringle (1974) profile
   }else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
     if(power_law){
-      den = std::pow(rad*au/r0, prho) * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0)); 
+      den = std::pow(rad*au/r0, prho) 
+            * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0)); 
     } else {
       den = std::pow(rad/rc, prho) * std::exp(-std::pow(rad/rc, 2.0+pSig))      // Lynden-Bell and Pringle (1974) profile
-              * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));  // vertical structure          
+            * std::exp(SQR(rad/h) * (rad / std::sqrt(SQR(rad) + SQR(z)) - 1.0));  // vertical structure          
     }
   }
   return std::max(den,dfloor);
@@ -660,10 +661,11 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z,
   //! ************************************************************************
   // ------------ Turbulent velocities --------------
   Real alpha_av;
-  if(use_alpha_av == false)
-    alpha_av = alpha_turb;
-  else
+  if(use_alpha_av){
     alpha_av = SQR(vgas/cs);
+  } else {
+    alpha_av = alpha_turb;
+  }
   Real Re    = alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
   Real vn    = std::sqrt(alpha_av)*cs;
   Real vs    = vn * std::pow(Re,-0.25);
@@ -911,7 +913,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
     for (int j = pmb->js; j <= pmb->je; ++j) {
       for (int i = pmb->is; i <= pmb->ie; ++i) {
         GetCylCoord(pmb->pcoord,rad,phi,z,i,j,k);
-        cs_iso  = SspeedProfileCyl(rad, phi, z);
+        cs_iso  = pmb->ruser_meshblock_data[1](k,j,i);
         omega = std::pow(rad, -1.5);
 
         //--------------------------------------------------------------------------------------
@@ -969,7 +971,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           // damping gas
           e_kin = .5/cons(IDN,k,j,i)*(SQR(cons(IM1,k,j,i))+SQR(cons(IM2,k,j,i))+SQR(cons(IM3,k,j,i)));
           cs2_old = (cons(IEN,k,j,i) - e_kin)*(gamma_gas-1.)/cons(IDN,k,j,i);    // store soundspeed before damping
-          // cs2_eq  = SQR(cs_iso); // equilibrium soundspeed^2 (temperature)
+          cs2_eq  = SQR(cs_iso); // equilibrium soundspeed^2 (temperature)
           cons(IDN,k,j,i) -= (1.-dampterm) * (prim(IDN,k,j,i) - rho0);
           cons(IM1,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)* prim(IVX,k,j,i);
           cons(IM2,k,j,i) -= (1.-dampterm) * prim(IDN,k,j,i)* prim(IVY,k,j,i);
@@ -1049,7 +1051,6 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           dvmax = dv_tot(afac*amax, amax, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER);
           dv11  = dv_tot(afac*a1, a1, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER); 
           dv01  = dv_tot(a0, a1, dPdr, rho, cs_i, Om_i, z_i, pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER); 
-        
 
           //--------------------------------------------------------------------------------------
           //               Determine the coagulation and fragmentation parameters
@@ -1069,10 +1070,11 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           St_mn    = afac*St_mx;
           Stmx2p1  = SQR(St_mx) + 1.;
           Stmn2p1  = SQR(St_mn) + 1.;
-          if(use_alpha_av == false)
-            vgas = std::sqrt(alpha_turb)*cs_i;
-          else    
+          if(use_alpha_av){
             vgas = pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER;
+          } else {
+            vgas = std::sqrt(alpha_turb)*cs_i;
+          }
           vsmall   = vgas * std::sqrt((St_mx-St_mn)/(St_mx+St_mn) * (SQR(St_mx)/(St_mx+pow(Re,-0.5)) - SQR(St_mn)/(St_mn+pow(Re,-0.5))));
           vinter   = vgas * std::sqrt(2.292*St_mx);
           vtr_simp = psmall*vsmall + pint*vinter;
@@ -1095,9 +1097,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           sig11 = PI * SQR(afac*a1 + a1);
           sig01 = PI * SQR(a0 + a1);
           f = sig01/sig11 * dv01/dv11 * std::pow(amax/aint, -(xi+4.));
+
           deps10 = rho * eps1 * eps1 * sig11 * dv11 * f / m1;
           deps01 = rho * eps1 * eps0 * sig01 * dv01     / m1;
-
           deps01 *= unit_len/unit_vel; // unit conversion to [1/code_time]
           deps10 *= unit_len/unit_vel; // unit conversion to [1/code_time]
 
@@ -1108,7 +1110,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           adot  = prim_df(4,k,j,i)*unit_rho * dvmax / rho_m * (1.0 - 2.0 / (1.0 + pow(v_frag/dvmax,sfac)));
           adot *= unit_len/unit_vel; // unit conversion to [cm/code_time]
           adot_max = 0.4*amax/dt; // limit the rate
-          adot     = adot * adot_max / sqrt(adot * adot  + adot_max* adot_max);
+          adot = adot * adot_max / sqrt(adot * adot  + adot_max* adot_max);
 
           //--------------------------------------------------------------------------------------
           //            Calculate the maximum size reduction if large dust is depleted
