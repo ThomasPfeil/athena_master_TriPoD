@@ -20,6 +20,7 @@
 #include <sstream>    // stringstream
 #include <stdexcept>  // runtime_error
 #include <string>     // c_str()
+#include <limits.h>
 
 // Athena++ headers
 #include "../athena.hpp"
