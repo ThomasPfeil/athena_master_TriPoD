@@ -1203,8 +1203,8 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           vel = pmb->ruser_meshblock_data[2](k,j,il-i);
           // if (pmb->porb->orbital_advection_defined)
           //   vel -= vK(pmb->porb, pco->x1v(il-i), pco->x2v(j), pco->x3v(k));
-          prim(IM1,k,j,il-i) = prim(IM1,k,j,il); 
-          prim(IM2,k,j,il-i) = prim(IM2,k,j,il); 
+          prim(IM1,k,j,il-i) = 0.; 
+          prim(IM2,k,j,il-i) = 0.; 
           prim(IM3,k,j,il-i) = vel;
           prim(IDN,k,j,il-i) = den;
           prim(IPR,k,j,il-i) = SQR(cs)*den;
@@ -1219,8 +1219,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            eps0   = prim_df(rho_id, k, j, il)/prim(IDN,k,j,il);
-            prim_df(rho_id, k, j, il-i) = den * eps0;
+            prim_df(rho_id,k,j,il-i) = prim_df(rho_id,k,j,il);
             prim_df(v1_id,k,j,il-i) = prim_df(v1_id,k,j,il);
             prim_df(v2_id,k,j,il-i) = prim_df(v2_id,k,j,il);
             prim_df(v3_id,k,j,il-i) = vel;
@@ -1230,8 +1229,7 @@ void DiskInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            eps1   = prim_df(rho_id, k, j, il)/prim(IDN,k,j,il);
-            prim_df(rho_id, k, j, il-i) = den * eps1;
+            prim_df(rho_id,k,j,il-i) = prim_df(rho_id,k,j,il);
             prim_df(v1_id,k,j,il-i) = prim_df(v1_id,k,j,il);
             prim_df(v2_id,k,j,il-i) = prim_df(v2_id,k,j,il);
             prim_df(v3_id,k,j,il-i) = vel;
@@ -1331,13 +1329,13 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           vel = pmb->ruser_meshblock_data[2](k,jl-j,i);
           // if (pmb->porb->orbital_advection_defined)
           //   vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(jl-j), pco->x3v(k));
-          prim(IM1,k,jl-j,i) = prim(IM1,k,jl+j-1,i); 
-          prim(IM2,k,jl-j,i) = -prim(IM2,k,jl+j-1,i); 
+          prim(IM1,k,jl-j,i) = 0.; 
+          prim(IM2,k,jl-j,i) = 0.; 
           prim(IM3,k,jl-j,i) = vel;
-          prim(IDN,k,jl-j,i) = prim(IDN,k,jl+j-1,i);
-          prim(IPR,k,jl-j,i) = prim(IPR,k,jl+j-1,i);
+          prim(IDN,k,jl-j,i) = den;
+          prim(IPR,k,jl-j,i) = SQR(cs)*den;
           if (NON_BAROTROPIC_EOS)
-            prim(IEN,k,jl-j,i) = prim(IEN,k,jl+j-1,i);
+            prim(IEN,k,jl-j,i) = SQR(cs)*den;
           if (NDUSTFLUIDS > 0){
             amax  = pmb->pscalars->r(0,k,jl+j-1,i); 
 
@@ -1356,7 +1354,7 @@ void DiskInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id,k,jl-j,i) = 0.0; //prim_df(rho_id,k,jl+j-1,i);
+            prim_df(rho_id,k,jl-j,i) = prim_df(rho_id,k,jl+j-1,i);
             prim_df(v1_id,k,jl-j,i) = prim_df(v1_id,k,jl+j-1,i);
             prim_df(v2_id,k,jl-j,i) = -prim_df(v2_id,k,jl+j-1,i);
             prim_df(v3_id,k,jl-j,i) = vel;
@@ -1394,13 +1392,13 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
           vel = pmb->ruser_meshblock_data[2](k,ju+j,i);
           // if (pmb->porb->orbital_advection_defined)
           //   vel -= vK(pmb->porb, pco->x1v(i), pco->x2v(ju+j), pco->x3v(k));
-          prim(IM1,k,ju+j,i) = prim(IM1,k,ju-j+1,i);
-          prim(IM2,k,ju+j,i) = -prim(IM2,k,ju-j+1,i);
+          prim(IM1,k,ju+j,i) = 0.;
+          prim(IM2,k,ju+j,i) = 0.;
           prim(IM3,k,ju+j,i) = vel;
-          prim(IDN,k,ju+j,i) = prim(IDN,k,ju-j+1,i); 
-          prim(IPR,k,ju+j,i) = prim(IPR,k,ju-j+1,i);
+          prim(IDN,k,ju+j,i) = den; 
+          prim(IPR,k,ju+j,i) = SQR(cs)*den;
           if (NON_BAROTROPIC_EOS)
-            prim(IEN,k,ju+j,i) = prim(IEN,k,ju-j+1,i);
+            prim(IEN,k,ju+j,i) = SQR(cs)*den;
           if (NDUSTFLUIDS > 0){
             amax = pmb->pscalars->r(0,k,ju-j+1,i);
 
@@ -1410,19 +1408,19 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
             prim_df(rho_id,k,ju+j,i) = prim_df(rho_id,k,ju-j+1,i);
-            prim_df(v1_id,k,ju+j,i)  = prim_df(v1_id,k,ju-j+1,i);
-            prim_df(v2_id,k,ju+j,i)  = -prim_df(v2_id,k,ju-j+1,i);
-            prim_df(v3_id,k,ju+j,i)  = vel;
+            prim_df(v1_id,k,ju+j,i) = prim_df(v1_id,k,ju-j+1,i);
+            prim_df(v2_id,k,ju+j,i) = -prim_df(v2_id,k,ju-j+1,i);
+            prim_df(v3_id,k,ju+j,i) = vel;
 
             dust_id = 1;
             rho_id  = 4*dust_id;
             v1_id   = rho_id + 1;
             v2_id   = rho_id + 2;
             v3_id   = rho_id + 3;
-            prim_df(rho_id,k,ju+j,i) = 0.0; //prim_df(rho_id,k,ju-j+1,i);
-            prim_df(v1_id,k,ju+j,i)  = prim_df(v1_id,k,ju-j+1,i);
-            prim_df(v2_id,k,ju+j,i)  = -prim_df(v2_id,k,ju-j+1,i);
-            prim_df(v3_id,k,ju+j,i)  = vel;
+            prim_df(rho_id,k,ju+j,i) = prim_df(rho_id,k,ju-j+1,i);
+            prim_df(v1_id,k,ju+j,i) = prim_df(v1_id,k,ju-j+1,i);
+            prim_df(v2_id,k,ju+j,i) = -prim_df(v2_id,k,ju-j+1,i);
+            prim_df(v3_id,k,ju+j,i) = vel;
 
             if(NSCALARS == 1){
               pmb->pscalars->r(0,k,ju+j,i) = amax;
