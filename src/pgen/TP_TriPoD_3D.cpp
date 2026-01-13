@@ -704,7 +704,7 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z,
   dvdr_r   = std::fabs(2.*vdrmax * (St_mx/Stmx2p1 - St_mn/Stmn2p1));
   dvdr_phi = std::fabs(vdrmax * (Stmx2p1-Stmn2p1)/(Stmx2p1*Stmn2p1));
 
-  return std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi));
+  return std::min(cs, std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi)));
 }
 
 
@@ -757,7 +757,7 @@ Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Re
   vdrmax   = - 0.5 * H*H * omega/(rhog*cs*cs) * dp;
   dvdr_phi = std::fabs(vdrmax * (Stmx2p1-Stmn2p1)/(Stmx2p1*Stmn2p1));
 
-  return std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi));
+  return std::min(cs, std::sqrt(SQR(dvtr)+SQR(dvBr)+SQR(dvset)+SQR(dvdr_r)+SQR(dvdr_phi)));
 }
 
 
@@ -796,6 +796,10 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
         
         St0 = Stokes_vol(a0, prim(IDN,k,j,i), cs, om, 1.0);
         St1 = Stokes_vol(a1, prim(IDN,k,j,i), cs, om, 1.0);
+        if(St0!=St0 || St1!=St1){
+          printf("%d, %d, amax=%.3e, q_d=%.3e, a0=%.3e, a1=%.3e, prs=%.3e, rhi=%.3e, rhod0=%.3e, rhod1=%.3e \n", i,j, amax, q_d, a0, a1, prim(IPR,k,j,i), prim(IDN,k,j,i), prim_df(0,k,j,i), prim_df(4,k,j,i));
+          std::exit(EXIT_FAILURE);
+        }
 
         // printf("%.3e %.3e %.3e %.3e %.3e %.3e %.3e %.3e \n", rad,phi,z,amax, a0, a1, St0, St1);
 
@@ -1004,7 +1008,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
         // ! Dust coagulation with the TriPoD method (Pfeil et al., 2024)
         //                 calculations done in cgs units
         // --------------------------------------------------------------------------------------
-        if(NDUSTFLUIDS>0 && coag && prim_s(0,k,j,i)>a_min){
+        if(NDUSTFLUIDS>0 && coag && cons_df(4,k,j,i)/cons(IDN,k,j,i)>1e-10 && cons_df(0,k,j,i)/cons(IDN,k,j,i)>1e-10){
           //--------------------------------------------------------------------------------------
           //                                Coordinate grid
           //--------------------------------------------------------------------------------------
