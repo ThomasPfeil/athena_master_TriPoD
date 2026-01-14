@@ -236,10 +236,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   // User-defined output variables
-  AllocateUserOutputVariables(3);
+  AllocateUserOutputVariables(6);
 
   // Store initial condition and maximum particle size for internal use
-  AllocateRealUserMeshBlockDataField(8); // rhog, cs, vphi, trelax
+  AllocateRealUserMeshBlockDataField(16); // rhog, cs, vphi, trelax
   Real orb_defined;
   (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
   OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
@@ -256,6 +256,15 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   ruser_meshblock_data[5].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
   ruser_meshblock_data[6].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // saving the density source term
   ruser_meshblock_data[7].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // saving the particle size source term
+  
+  ruser_meshblock_data[8].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[9].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[10].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[11].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[12].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[13].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[14].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[15].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
 
   Real den, cs, vg_phi, rad, phi, z, x1, x2, x3;
   Real amean, St_mid, OmK, eps, den_dust, den_mid, as, sig_s, ns, tcool, rhod_tot, amax, q_d, aint, eps0, eps1, rhod0, rhod1, a0, a1, sigma, St0, St1;
@@ -313,6 +322,14 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         ruser_meshblock_data[5](k, j, i) = 0.;
         ruser_meshblock_data[6](k, j, i) = 0.;
         ruser_meshblock_data[7](k, j, i) = 0.;
+        ruser_meshblock_data[8](k, j, i) = 0.;
+        ruser_meshblock_data[9](k, j, i) = 0.;
+        ruser_meshblock_data[10](k, j, i) = 0.;
+        ruser_meshblock_data[11](k, j, i) = 0.;        
+        ruser_meshblock_data[12](k, j, i) = 0.;
+        ruser_meshblock_data[13](k, j, i) = 0.;
+        ruser_meshblock_data[14](k, j, i) = 0.;
+        ruser_meshblock_data[15](k, j, i) = 0.;
       }
     }
   }
@@ -945,6 +962,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   Real tcool, cs2_old, cs2_eq, cs2_new, e_kin;
   Real th_in_b, th_out_b, f_in, f_out, f_tot, dampterm, vphi;
   Real vphi0, rho0;
+  Real alpha_av;
   Real tcoag_lim, epslim;
   int rho_id, v1_id, v2_id, v3_id;
     
@@ -1071,8 +1089,13 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           H_i    = cs_i/Om_i;
           rho    = prim(IDN,k,j,i) * unit_rho;
           tau_f  = rho_m / (std::sqrt(8.0/PI)*cs_i * rho);
-          Re     = alpha_turb * 2e-15 * rho * cs_i / Om_i / (mp * mue);
-
+          if(use_alpha_av){
+            alpha_av = SQR((pmb->ruser_meshblock_data[5](k,j,i)*unit_vel+TINY_NUMBER)/cs_i);
+            Re = alpha_av * 2e-15 * rho * cs_i / Om_i / (mp * mue);
+          } else {
+            Re = alpha_turb * 2e-15 * rho * cs_i / Om_i / (mp * mue);
+          }
+          
           //--------------------------------------------------------------------------------------
           //                          Dust properties and distribution
           //--------------------------------------------------------------------------------------
@@ -1499,31 +1522,54 @@ void MeshBlock::UserWorkInLoop() {
           ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
           tcool = std::min(500., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
 
-          vr_av   = 0.;
-          vth_av  = 0.;
-          vphi_av = 0.;
-          rho_av  = 0.;
-          for(int iloc=i-1; iloc<=i+1; iloc++){
-            for(int jloc=j-1; jloc<=j+1; jloc++){
-              for(int kloc=k-1; kloc<=k+1; kloc++){
-                dV = pcoord->GetCellVolume(kloc,jloc,iloc);
-                vr_av   += phydro->u(IM1,kloc,jloc,iloc)*dV;
-                vth_av  += phydro->u(IM2,kloc,jloc,iloc)*dV;
-                vphi_av += phydro->u(IM3,kloc,jloc,iloc)*dV;
-                rho_av  += phydro->u(IDN,kloc,jloc,iloc)*dV;
-              }
-            }
-          }
-          vr_av   /= rho_av; // mass-averaged velocity of the 27 cells
-          vth_av  /= rho_av; // mass-averaged velocity of the 27 cells
-          vphi_av /= rho_av; // mass-averaged velocity of the 27 cells
-          vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i) - vr_av)
-                             + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i) - vth_av)
-                             + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - vphi_av)); // rms local deviation from surruounding average
+          // vr_av   = 0.;
+          // vth_av  = 0.;
+          // vphi_av = 0.;
+          // rho_av  = 0.;
+          // for(int iloc=i-2; iloc<=i+2; iloc++){
+          //   for(int jloc=j-2; jloc<=j+2; jloc++){
+          //     for(int kloc=k-2; kloc<=k+2; kloc++){
+          //       dV = pcoord->GetCellVolume(kloc,jloc,iloc);
+          //       vr_av   += phydro->u(IM1,kloc,jloc,iloc)*dV;
+          //       vth_av  += phydro->u(IM2,kloc,jloc,iloc)*dV;
+          //       vphi_av += phydro->u(IM3,kloc,jloc,iloc)*dV;
+          //       rho_av  += phydro->u(IDN,kloc,jloc,iloc)*dV;
+          //     }
+          //   }
+          // }
+          // vr_av   /= rho_av; // mass-averaged velocity of the 27 cells
+          // vth_av  /= rho_av; // mass-averaged velocity of the 27 cells
+          // vphi_av /= rho_av; // mass-averaged velocity of the 27 cells
+          // vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i) - vr_av)
+          //                    + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i) - vth_av)
+          //                    + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - vphi_av)); // rms local deviation from surruounding average
 
+          // vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i))
+          //                    + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i))
+          //                    + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i))); // calculate local turbulent velocity (instantanious)
+          
           ruser_meshblock_data[3](k,j,i) = q_d;
           ruser_meshblock_data[4](k,j,i) = tcool;
+
+          // Calculate turbulent r.m.s. velocity
+          Real smooth_const_vrms = 1e-3;
+          ruser_meshblock_data[8](k,j,i) = phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i)*smooth_const_vrms + (1.-smooth_const_vrms)*ruser_meshblock_data[8](k,j,i);
+          ruser_meshblock_data[9](k,j,i) = phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i)*smooth_const_vrms + (1.-smooth_const_vrms)*ruser_meshblock_data[9](k,j,i);
+          ruser_meshblock_data[10](k,j,i) = (phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i))*smooth_const_vrms + (1.-smooth_const_vrms)*ruser_meshblock_data[10](k,j,i);
+
+          vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[8](k,j,i))
+                             + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[9](k,j,i))
+                             + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i) - ruser_meshblock_data[10](k,j,i))); // calculate local turbulent velocity (instantanious)
           ruser_meshblock_data[5](k,j,i) = vtot_rms;
+
+          // Calculate turbulent local alpha
+          Real smooth_const_alpha = 1e-3;
+          ruser_meshblock_data[11](k,j,i)  = phydro->u(IM1,k,j,i)*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[11](k,j,i); // <rho*vr>
+          ruser_meshblock_data[12](k,j,i) = (phydro->u(IM1,k,j,i)*(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i)))*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[12](k,j,i); // <rho*vr*(vphi-vK)>
+          ruser_meshblock_data[13](k,j,i) = (phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i))*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[13](k,j,i); // <vphi-vK>
+          ruser_meshblock_data[14](k,j,i) = phydro->u(IPR,k,j,i)*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[14](k,j,i); // <P>
+          ruser_meshblock_data[15](k,j,i) = (ruser_meshblock_data[12](k,j,i) - ruser_meshblock_data[11](k,j,i)*ruser_meshblock_data[13](k,j,i)) / ruser_meshblock_data[14](k,j,i); // alpha = (<rho*vr*(vphi-vK)> - <rho*vr><vphi-vK>) / <P>
+          // printf("roll. av.=%.3e, vtot_rms=%.3e \n", i,j,k, ruser_meshblock_data[5](k,j,i), vtot_rms);
         }
       }
     }
@@ -1539,6 +1585,9 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin){
         user_out_var(0,k,j,i) = ruser_meshblock_data[3](k,j,i);
         user_out_var(1,k,j,i) = ruser_meshblock_data[4](k,j,i) * std::pow(rad,-1.5);
         user_out_var(2,k,j,i) = ruser_meshblock_data[5](k,j,i);
+        user_out_var(3,k,j,i) = ruser_meshblock_data[15](k,j,i);
+        user_out_var(4,k,j,i) = ruser_meshblock_data[6](k,j,i);
+        user_out_var(5,k,j,i) = ruser_meshblock_data[7](k,j,i);
       }
     }
   }
