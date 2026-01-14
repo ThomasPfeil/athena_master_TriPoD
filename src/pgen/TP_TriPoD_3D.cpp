@@ -1521,7 +1521,12 @@ void MeshBlock::UserWorkInLoop() {
           sig_s = PI*SQR(as);      // Sauter mean radius collision cross section
           ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
           tcool = std::min(500., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+          
+          ruser_meshblock_data[3](k,j,i) = q_d;
+          ruser_meshblock_data[4](k,j,i) = tcool;
 
+          // Calculate turbulent r.m.s. velocity
+          
           // vr_av   = 0.;
           // vth_av  = 0.;
           // vphi_av = 0.;
@@ -1547,11 +1552,7 @@ void MeshBlock::UserWorkInLoop() {
           // vtot_rms = std::sqrt(SQR(phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i))
           //                    + SQR(phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i))
           //                    + SQR(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i))); // calculate local turbulent velocity (instantanious)
-          
-          ruser_meshblock_data[3](k,j,i) = q_d;
-          ruser_meshblock_data[4](k,j,i) = tcool;
 
-          // Calculate turbulent r.m.s. velocity
           Real smooth_const_vrms = 1e-3;
           ruser_meshblock_data[8](k,j,i) = phydro->u(IM1,k,j,i)/phydro->u(IDN,k,j,i)*smooth_const_vrms + (1.-smooth_const_vrms)*ruser_meshblock_data[8](k,j,i);
           ruser_meshblock_data[9](k,j,i) = phydro->u(IM2,k,j,i)/phydro->u(IDN,k,j,i)*smooth_const_vrms + (1.-smooth_const_vrms)*ruser_meshblock_data[9](k,j,i);
