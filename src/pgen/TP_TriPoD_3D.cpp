@@ -68,6 +68,7 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
 void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
     const AthenaArray<Real> &prim_df, const AthenaArray<Real> &prim_s, const AthenaArray<Real> &bcc,
     AthenaArray<Real> &cons, AthenaArray<Real> &cons_df, AthenaArray<Real> &cons_s);
+Real MyTimeStep(MeshBlock *pmb);
 
 // problem parameters which are useful to make global to this file
 Real year, au, mp, M_sun, gm0, G, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, delta_ini, v_frag, alpha_turb, alpha_gas, M_in, R_in, R_out, a_in, r_sm;
@@ -202,6 +203,9 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   dfloor=pin->GetOrAddReal("hydro","dfloor",(1024*(float_min)));
 
   Omega0 = pin->GetOrAddReal("orbital_advection","Omega0",0.0);
+  
+  // Enroll time step function
+  EnrollUserTimeStepFunction(MyTimeStep);
 
   // Enroll Source Terms
   EnrollUserExplicitSourceFunction(MySource);
@@ -235,7 +239,7 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   AllocateUserOutputVariables(3);
 
   // Store initial condition and maximum particle size for internal use
-  AllocateRealUserMeshBlockDataField(6); // rhog, cs, vphi, trelax
+  AllocateRealUserMeshBlockDataField(8); // rhog, cs, vphi, trelax
   Real orb_defined;
   (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
   OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
@@ -250,6 +254,8 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   ruser_meshblock_data[3].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // power law exponent
   ruser_meshblock_data[4].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // trelax
   ruser_meshblock_data[5].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
+  ruser_meshblock_data[6].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // saving the density source term
+  ruser_meshblock_data[7].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // saving the particle size source term
 
   Real den, cs, vg_phi, rad, phi, z, x1, x2, x3;
   Real amean, St_mid, OmK, eps, den_dust, den_mid, as, sig_s, ns, tcool, rhod_tot, amax, q_d, aint, eps0, eps1, rhod0, rhod1, a0, a1, sigma, St0, St1;
@@ -304,6 +310,9 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         tcool = std::min(50., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
 
         ruser_meshblock_data[4](k, j, i) = tcool;
+        ruser_meshblock_data[5](k, j, i) = 0.;
+        ruser_meshblock_data[6](k, j, i) = 0.;
+        ruser_meshblock_data[7](k, j, i) = 0.;
       }
     }
   }
@@ -821,6 +830,28 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
   return;
 }
 
+Real MyTimeStep(MeshBlock *pmb)
+{
+  Real min_dt=100.;
+  for (int k=pmb->ks; k<=pmb->ke; ++k) {
+    for (int j=pmb->js; j<=pmb->je; ++j) {
+      for (int i=pmb->is; i<=pmb->ie; ++i) {
+        if(NDUSTFLUIDS>0 && coag && pmb->pscalars->s(0,k,j,i)/pmb->pdustfluids->df_cons(4,k,j,i)>1e-4 && pmb->pdustfluids->df_cons(4,k,j,i)/pmb->phydro->u(IDN,k,j,i)>1e-8 && pmb->pdustfluids->df_cons(1,k,j,i)/pmb->phydro->u(IDN,k,j,i)>1e-8){
+          Real dt, dt_amax, dt_rhod1, dt_rhod0, fac;
+          fac = 0.1;
+          dt_rhod0 = fac * std::fabs(pmb->pdustfluids->df_cons(0,k,j,i)/pmb->ruser_meshblock_data[6](k,j,i));
+          dt_rhod1 = fac * std::fabs(pmb->pdustfluids->df_cons(4,k,j,i)/pmb->ruser_meshblock_data[6](k,j,i));
+          dt_amax  = fac * std::fabs(pmb->pscalars->s(0,k,j,i)/pmb->ruser_meshblock_data[7](k,j,i));
+          
+          dt = std::min(dt_amax, std::min(dt_rhod0,dt_rhod1));
+          min_dt = std::min(min_dt, dt);
+        }
+      }
+    }
+  }
+  return min_dt;
+}
+
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
       const AthenaArray<Real> &stopping_time, AthenaArray<Real> &nu_dust,
@@ -914,6 +945,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
   Real tcool, cs2_old, cs2_eq, cs2_new, e_kin;
   Real th_in_b, th_out_b, f_in, f_out, f_tot, dampterm, vphi;
   Real vphi0, rho0;
+  Real tcoag_lim, epslim;
   int rho_id, v1_id, v2_id, v3_id;
     
 
@@ -1114,13 +1146,16 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           deps01 *= unit_len/unit_vel; // unit conversion to [1/code_time]
           deps10 *= unit_len/unit_vel; // unit conversion to [1/code_time]
 
-          epsdot_max = std::min(0.4*eps0, 0.4*eps1)/dt; // limit the rate
-          deps01 = deps01 * epsdot_max / sqrt(deps01 * deps01  + epsdot_max* epsdot_max); // limit mass exchange rate
-          deps10 = deps10 * epsdot_max / sqrt(deps10 * deps10  + epsdot_max* epsdot_max); // limit mass exchange rate
-
           adot  = prim_df(4,k,j,i)*unit_rho * dvmax / rho_m * (1.0 - 2.0 / (1.0 + pow(v_frag/dvmax,sfac)));
           adot *= unit_len/unit_vel; // unit conversion to [cm/code_time]
-          adot_max = 0.4*amax/dt; // limit the rate
+
+          // Limit the rates
+          epslim = 1.; 
+          tcoag_lim = 1/(epslim*omega);
+          adot_max = amax/tcoag_lim; // limit the rates to a max. coagulation timescale tcoag_lim = 1/epslim/omega
+          epsdot_max = std::min(eps0, eps1)/tcoag_lim; // limit the rate
+          deps10 = deps10 * epsdot_max / sqrt(deps10 * deps10  + epsdot_max* epsdot_max); 
+          deps01 = deps01 * epsdot_max / sqrt(deps01 * deps01  + epsdot_max* epsdot_max); 
           adot = adot * adot_max / sqrt(adot * adot  + adot_max* adot_max);
 
           //--------------------------------------------------------------------------------------
@@ -1154,26 +1189,29 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           //--------------------------------------------------------------------------------------
           //           Add the growth and mass-exchange rates to the source terms
           //--------------------------------------------------------------------------------------
-          cons_df(0,k,j,i) += dt*prim(IDN,k,j,i) * (deps10 - deps01); // mass exchange rate
+          pmb->ruser_meshblock_data[6](k,j,i) = prim(IDN,k,j,i) * (deps10 - deps01); // saving the density source term for timestep calculation
+
+          cons_df(0,k,j,i) += dt*pmb->ruser_meshblock_data[6](k,j,i); // mass exchange rate
           cons_df(1,k,j,i) += dt*prim(IDN,k,j,i) * (dm1_10 - dm1_01); // mom. exchange rate dim. 1
           cons_df(2,k,j,i) += dt*prim(IDN,k,j,i) * (dm2_10 - dm2_01); // mom. exchange rate dim. 2
           cons_df(3,k,j,i) += dt*prim(IDN,k,j,i) * (dm3_10 - dm3_01); // mom. exchange rate dim. 3
 
-          cons_df(4,k,j,i) -= dt*prim(IDN,k,j,i) * (deps10 - deps01); // mass exchange rate
+          cons_df(4,k,j,i) -= dt*pmb->ruser_meshblock_data[6](k,j,i); // mass exchange rate
           cons_df(5,k,j,i) -= dt*prim(IDN,k,j,i) * (dm1_10 - dm1_01); // mom. exchange rate dim. 1
           cons_df(6,k,j,i) -= dt*prim(IDN,k,j,i) * (dm2_10 - dm2_01); // mom. exchange rate dim. 2
           cons_df(7,k,j,i) -= dt*prim(IDN,k,j,i) * (dm3_10 - dm3_01); // mom. exchange rate dim. 3
 
+          pmb->ruser_meshblock_data[7](k,j,i) = prim(IDN,k,j,i) * (adot*eps1 - amax*(deps10 - deps01)); // saving the particle size source term for timestep calculation
           if(NSCALARS==1){
-            cons_s(0,k,j,i)  += dt*prim(IDN,k,j,i) * (adot*eps1 - amax*(deps10 - deps01)); // particle size evolution
+            cons_s(0,k,j,i) += dt*pmb->ruser_meshblock_data[7](k,j,i); // particle size evolution
           }else if (NSCALARS==3){
-            cons_s(0,k,j,i) += dt*prim(IDN,k,j,i) * (adot*eps1 - amax*(deps10 - deps01));
+            cons_s(0,k,j,i) += dt*pmb->ruser_meshblock_data[7](k,j,i);
             cons_s(1,k,j,i) += dt*prim(IDN,k,j,i) * (prim_s(2,k,j,i)*deps10 - prim_s(1,k,j,i)*deps01);
             cons_s(2,k,j,i) -= dt*prim(IDN,k,j,i) * (prim_s(2,k,j,i)*deps10 - prim_s(1,k,j,i)*deps01);
           }
           // printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, rho0=%.3e, rho1=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i),cons_df(0,k,j,i),cons_df(4,k,j,i));
           if(adot!=adot || deps10!=deps10 || deps01!=deps01 || cons_s(0,k,j,i)!=cons_s(0,k,j,i) || cons_df(0,k,j,i)!=cons_df(0,k,j,i) || cons_df(4,k,j,i)!=cons_df(4,k,j,i)){
-            printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, rho0=%.3e, rho1=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i),cons_df(0,k,j,i),cons_df(4,k,j,i));
+            printf("%d, %d, adot=%.3e, deps10=%.3e, deps01=%.3e, amaxrho=%.3e, amax=%.3e, rho0=%.3e, rho1=%.3e, dvmax=%.3e, dv11=%.3e, dv01=%.3e \n", i,j, adot, deps10, deps01, cons_s(0,k,j,i), prim_s(0,k,j,i), cons_df(0,k,j,i),cons_df(4,k,j,i), dvmax, dv11, dv01);
             std::cout << "NaN Found";
             std::exit(EXIT_FAILURE);
           }
@@ -1451,10 +1489,15 @@ void MeshBlock::UserWorkInLoop() {
           
           cs    = std::sqrt(phydro->u(IPR,k,j,i)/phydro->u(IDN,k,j,i)); 
           rhod_tot = pdustfluids->df_cons(4,k,j,i) + pdustfluids->df_cons(0,k,j,i);
-          as    = a_min * (q_d+3.)/(q_d+4.) * (std::pow(amax/a_min,q_d+4)-1.)/(std::pow(amax/a_min,q_d+3)-1.); // Sauter mean radius 
+          if(q_d!=3.){
+            as = a_min * (q_d+3.)/(q_d+4.) * (std::pow(amax/a_min,q_d+4)-1.)/(std::pow(amax/a_min,q_d+3)-1.); // Sauter mean radius 
+          } else {
+            as = (amax-a_min)/std::log(amax/a_min);
+          }
+         
           sig_s = PI*SQR(as);      // Sauter mean radius collision cross section
           ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
-          tcool = std::min(1000., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+          tcool = std::min(500., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
 
           vr_av   = 0.;
           vth_av  = 0.;
