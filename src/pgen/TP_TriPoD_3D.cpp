@@ -56,6 +56,10 @@ void planet_acc_plummer(Real R, Real phi, Real z, Real time, Real* aR, Real* aph
 void planet_acc_power(Real R, Real phi, Real z, Real time, Real* aR, Real* aphi, Real* az);
 void dust_pert_eq_pow_BL19(Real rad, Real phi, Real z, Real St0, Real St1, Real eps0, Real eps1, Real* vrg, Real* vphig, Real* vrd0, Real* vphid0, Real* vrd1, Real* vphid1);
 
+void get_idx(const Real minval, const Real maxval, const int SIZE, const Real value, int &idx);
+void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx);
+void opacity_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
       const AthenaArray<Real> &stopping_time, AthenaArray<Real> &nu_dust,
@@ -71,7 +75,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 Real MyTimeStep(MeshBlock *pmb);
 
 // problem parameters which are useful to make global to this file
-Real year, au, mp, M_sun, gm0, G, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, delta_ini, v_frag, alpha_turb, alpha_gas, M_in, R_in, R_out, a_in, r_sm;
+Real year, au, mp, M_sun, gm0, G, kB, sig_sb, Cp, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, delta_ini, v_frag, alpha_turb, alpha_gas, M_in, R_in, R_out, a_in, r_sm;
 Real dfloor;
 Real Omega0;
 Real a_min, a_max_ini, q_dust, eps_ini, eps_floor, rho_m, mue;
@@ -81,8 +85,20 @@ Real R_p, Mp_s;
 Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
-Real sfac, afac;
+Real sfac, afac, C_dust;
 bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile, use_alpha_av;
+
+// Opacity data structures
+static int NUM_T;
+static int NUM_AMAX; 
+static int NUM_Q;  // total number of frequency groups 
+static std::string opacity_dir;
+static std::string opacity_fname;
+static AthenaArray<Real> T_grid;
+static AthenaArray<Real> q_grid;
+static AthenaArray<Real> a_grid;
+static AthenaArray<Real> planck_table;
+
 } // namespace
 
 // User-defined boundary conditions for disk simulations
@@ -128,6 +144,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   M_sun      = 1.989e33; // solar mass in gram
   year       = 3.154e7; // year in seconds
   G          = 6.67259e-8; // gravitational constant
+  kB         = 1.380649e-16; // Boltzmann constant
+  sig_sb     = 5.670374419e-5; // Stefan-Boltzmann constant
 
   ms         = pin->GetReal("problem","ms_in_msol") * M_sun; // stellar mass
   r0         = pin->GetReal("problem","r0_in_au") * au; // reference radiud
@@ -160,6 +178,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   C_in       = pin->GetReal("problem","C_in");
   C_out      = pin->GetReal("problem","C_out");
   eps_floor  = pin->GetReal("problem","eps_floor");
+  C_dust     = pin->GetReal("problem","SpecHeatDust");
 
   th_min = pin->GetReal("mesh","x2min");
   th_max = pin->GetReal("mesh","x2max");
@@ -169,7 +188,71 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   afac  = 0.4;
   sfac  = 8.0;
 
-  // Define the code units - needed for Stokes number calculation
+  //=====================================================================================
+  // Start Opacity Read-in: Planck opacities for power-law grain size distributions
+  //=====================================================================================
+  opacity_dir   = pin->GetOrAddString("problem", "opacity_directory","./");
+  opacity_fname = pin->GetOrAddString("problem", "opacity_fname","");
+
+  FILE *f_opacity;
+  if ( (f_opacity=fopen((opacity_dir + opacity_fname).c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open opacity file.");
+  }
+  fscanf(f_opacity,"%d",&NUM_T);
+  fscanf(f_opacity,"%d",&NUM_AMAX);
+  fscanf(f_opacity,"%d",&NUM_Q);
+
+  T_grid.NewAthenaArray(NUM_T);
+  a_grid.NewAthenaArray(NUM_AMAX);
+  q_grid.NewAthenaArray(NUM_Q);
+  planck_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
+ 
+  for(int k=0; k<NUM_T; ++k){
+    for(int j=0; j<NUM_AMAX; ++j){
+      for(int i=0; i<NUM_Q; ++i){
+        fscanf(f_opacity,"%lf",&(planck_table(k,j,i)));
+      }
+    }
+  }
+  fclose(f_opacity);
+
+  // Load q-grid
+  FILE *f_q;
+  if ( (f_q=fopen((opacity_dir + "q.txt").c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open q-file.");
+  }
+  for(int i=0; i<NUM_Q; ++i){
+    fscanf(f_q,"%lf",&(q_grid(i)));
+    // printf("q %d %.15e \n", i, q_grid(i));
+  }
+  fclose(f_q);
+
+  // Load amax-grid
+  FILE *f_amax;
+  if ( (f_amax=fopen((opacity_dir + "amax.txt").c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open amax-file.");
+  }
+  for(int j=0; j<NUM_AMAX; ++j){
+    fscanf(f_amax,"%lf",&(a_grid(j)));
+    // printf("amax %d %.15e \n", j, a_grid(j));
+  }
+  fclose(f_amax);
+
+  // Load T-grid
+  FILE *f_T;
+  if ( (f_T=fopen((opacity_dir + "T.txt").c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open T-file.");
+  }
+  for(int k=0; k<NUM_T; ++k){
+    fscanf(f_T,"%lf",&(T_grid(k)));
+    // printf("T %d %.15e \n", k, T_grid(k));
+  }
+  fclose(f_T);
+  // End Opacity Read-in 
+
+  //===================================================================================
+  // Start Code Unit Definition: Required for dust coagulation and cooling times
+  //===================================================================================
   if(power_law)
     unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar) * pow(au/rchar, pSig) * exp(-pow(au/rchar, 2.+pSig));
   else 
@@ -190,6 +273,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   unit_len  = r0;
   unit_time = 1./std::sqrt(ms * G / std::pow(unit_len,3.0));
   unit_vel  = unit_len/unit_time;
+  // End Code Unit Definition
 
   rc         = pin->GetReal("problem","rc_in_au") * au / unit_len;
   hr_r0      = hr_au * std::pow(unit_len/au, 0.5*(q+1.0));
@@ -199,6 +283,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // Get parameters of initial pressure and cooling parameters
   gamma_gas = pin->GetReal("hydro","gamma");
+  Cp         = gamma_gas*kB/((gamma_gas-1.)*mue*mp); // using Meyer's relation
   Real float_min = std::numeric_limits<float>::min();
   dfloor=pin->GetOrAddReal("hydro","dfloor",(1024*(float_min)));
 
@@ -236,10 +321,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   // User-defined output variables
-  AllocateUserOutputVariables(6);
+  AllocateUserOutputVariables(10);
 
   // Store initial condition and maximum particle size for internal use
-  AllocateRealUserMeshBlockDataField(16); // rhog, cs, vphi, trelax
+  AllocateRealUserMeshBlockDataField(20); // rhog, cs, vphi, trelax
   Real orb_defined;
   (porb->orbital_advection_defined) ? orb_defined = 1.0 : orb_defined = 0.0;
   OrbitalVelocityFunc &vK = porb->OrbitalVelocity;
@@ -266,8 +351,13 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   ruser_meshblock_data[14].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
   ruser_meshblock_data[15].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // velocity perturbation
 
+  ruser_meshblock_data[16].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // tcoll_g
+  ruser_meshblock_data[17].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // tcoll_d
+  ruser_meshblock_data[18].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // temis
+  ruser_meshblock_data[19].NewAthenaArray(block_size.nx3+2*NGHOST, block_size.nx2+2*NGHOST, block_size.nx1+2*NGHOST); // Planck opacity
+
   Real den, cs, vg_phi, rad, phi, z, x1, x2, x3;
-  Real amean, St_mid, OmK, eps, den_dust, den_mid, as, sig_s, ns, tcool, rhod_tot, amax, q_d, aint, eps0, eps1, rhod0, rhod1, a0, a1, sigma, St0, St1;
+  Real h, amean, St_mid, OmK, eps, den_dust, den_mid, as, sig_s, ns, rhod_tot, amax, q_d, aint, eps0, eps1, rhod0, rhod1, a0, a1, sigma, St0, St1;
   for (int k=is-NGHOST; k<=ke+NGHOST; ++k) {
     x3 = pcoord->x3v(k);
     for (int j=js-NGHOST; j<=je+NGHOST; ++j) {
@@ -308,7 +398,8 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         St0 = Stokes_int(a0, sigma, afac);
         St1 = Stokes_int(a1, sigma, afac);
         
-        Real h = cs/std::pow(rad,-1.5);
+        Real tcoll_g, tcoll_d, trelax, temis, Tg, kappa, tpar;
+        h = cs/std::pow(rad,-1.5);
         rhod0 = DenProfileCyl_dust(rad, phi, z, St0, eps0);
         rhod1 = DenProfileCyl_dust(rad, phi, z, St1, eps1);
         rhod_tot = rhod0 + rhod1;
@@ -316,9 +407,32 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         as    = a_min * (q_d+3.)/(q_d+4.) * (std::pow(amax/a_min,q_d+4.)-1.)/(std::pow(amax/a_min,q_d+3.)-1.); // Sauter mean radius 
         sig_s = PI*SQR(as);      // Sauter mean radius collision cross section
         ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
-        tcool = std::min(50., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+        
+        // =========================================================================
+        // Calculate tcoll_g
+        // =========================================================================
+        tcoll_g = std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time;
+          
+        // =========================================================================
+        // Calculate tcoll_d
+        // =========================================================================
+        tcoll_d = (rhod_tot/den) * (C_dust/Cp) * tcoll_g;
+        
+        // =========================================================================
+        // Calculate temis (optically thin emission timescale) from opacity table
+        // =========================================================================
+        Tg = SQR(cs*unit_vel)*mue*mp/kB;
+        opacity_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+        temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
 
-        ruser_meshblock_data[4](k, j, i) = tcool;
+        // =========================================================================
+        // Calculate total nom-LTE thermal relaxation timescale
+        // =========================================================================
+        tpar   = 1./(1./temis + 1./tcoll_d + 1./tcoll_g);
+        trelax = 2.*tpar / (1. - std::sqrt(1.- 4*SQR(tpar)/(tcoll_g*temis)));
+        trelax = std::min(500., trelax * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+
+        ruser_meshblock_data[4](k, j, i) = trelax;
         ruser_meshblock_data[5](k, j, i) = 0.;
         ruser_meshblock_data[6](k, j, i) = 0.;
         ruser_meshblock_data[7](k, j, i) = 0.;
@@ -330,6 +444,10 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         ruser_meshblock_data[13](k, j, i) = 0.;
         ruser_meshblock_data[14](k, j, i) = 0.;
         ruser_meshblock_data[15](k, j, i) = 0.;
+        ruser_meshblock_data[16](k, j, i) = tcoll_g;
+        ruser_meshblock_data[17](k, j, i) = tcoll_d;
+        ruser_meshblock_data[18](k, j, i) = temis;
+        ruser_meshblock_data[19](k, j, i) = kappa;
       }
     }
   }
@@ -372,7 +490,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
         // assign initial conditions for density and pressure (perturb profile)
         phydro->u(IDN,k,j,i) = (1.0 + pert*ran_rho) * den;
-        phydro->u(IPR,k,j,i) = SQR(cs) * phydro->u(IDN,k,j,i);
+        // phydro->u(IPR,k,j,i) = SQR(cs) * phydro->u(IDN,k,j,i);
 
         // assign initial conditions for momenta (perturb profiles)
         phydro->u(IM1,k,j,i) = ran_vx1*pert * cs * den;
@@ -800,6 +918,127 @@ Real deps1da(Real epstot, Real amax, Real p)
       return epstot*xi * (0.5*std::pow(a_min,xi)*std::pow(amax*a_min,0.5*xi) + std::pow(amax,xi)*(0.5*(std::pow(amax*a_min, 0.5*xi) - std::pow(a_min,xi)))) / (amax*std::pow(std::pow(amax,xi) - std::pow(a_min,xi),2.));
   }
 }
+
+// ================================================================================
+// Start Opacity Helper Functions - Based on Alexandros Ziampras opacity helper
+// ================================================================================
+
+void get_idx(const Real minval, const Real maxval, const int SIZE, const Real value, int &idx){
+  // Get index of value in 1D array 
+  // This is a linear interpolation !!! It only works if the array is regularly spaced
+  // Use log-values for log-spaced arrays
+  idx = (int)((SIZE-1) * (value-minval)/(maxval-minval));
+}
+
+void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx){
+  // Get the edge indixes of a cell of index idx
+  // This caps of indices outside of the range of the array
+  if(idx<0){
+    l_idx = 0;
+    r_idx = 0;
+  }else if(idx>=SIZE-1){
+    l_idx = SIZE-1;
+    r_idx = SIZE-1;
+  }else{
+    l_idx = std::min(std::max(idx,0), SIZE-1);
+    r_idx = l_idx+1;
+  }
+}
+
+void opacity_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+  // Get indices
+  int kT, ja, iq;
+  get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
+  get_idx(a_grid(0), a_grid(NUM_AMAX-1), NUM_AMAX, a_val, ja);
+  get_idx(q_grid(0), q_grid(NUM_Q-1), NUM_Q, q_val, iq);
+
+  // Get edge indices of cells
+  int kT_l, ja_l, iq_l, kT_r, ja_r, iq_r;
+  get_edges(NUM_T, kT, kT_l, kT_r);
+  get_edges(NUM_AMAX, ja, ja_l, ja_r);
+  get_edges(NUM_Q, iq, iq_l, iq_r);
+  // printf("Edge Indices: \n");
+  // printf("%d %d %d %d %d %d \n \n", kT_l, kT_r, ja_l, ja_r,iq_l, iq_r);
+
+  // Get edge values
+  double T_l, T_r, a_l, a_r, q_l, q_r;
+  T_l = T_grid(kT_l);
+  T_r = T_grid(kT_r);
+  a_l = a_grid(ja_l);
+  a_r = a_grid(ja_r);
+  q_l = q_grid(iq_l);
+  q_r = q_grid(iq_r);
+  // printf("Edge Cell values: \n");
+  // printf("%.10e %.10e \n %.10e %.10e \n %.10e %.10e \n \n", T_l, T_r, a_l, a_r, q_l, q_r);
+
+
+  // Calculate fractional distances of interpolation points to edges
+  double Td, ad, qd, disT, disa, disq;
+  // Td = (T_val - T_l)/(T_r-T_l);
+  // ad = (a_val - a_l)/(a_r-a_l);
+  // qd = (q_val - q_l)/(q_r-q_l);
+  disT = (T_grid(NUM_T-1)-T_grid(0))/(NUM_T-1);
+  disa = ((a_grid(NUM_AMAX-1)-a_grid(0))/(NUM_AMAX-1));
+  disq = ((q_grid(NUM_Q-1)-q_grid(0))/(NUM_Q-1));
+  Td = (T_val - T_l)/disT;
+  ad = (a_val - a_l)/disa;
+  qd = (q_val - q_l)/disq;
+  // printf("Fractional distances: \n");
+  // printf("%.10e %.10e %.10e \n \n", Td, ad, qd);
+
+  //        kP_lrr -------- kP_rrr
+  //         /|               /|
+  //        / |              / |
+  //       /  |     P       /  |        q(i-index)
+  //      /   |     x      /   |        |
+  // kP_llr -------- kP_rlr    |        |
+  //      |   |           |    |        |
+  //      |   kP_lrl -----|-- kP_rrl    /-------T(k-index)
+  //      |  /            |  /         / 
+  //      | /             | /         / 
+  //      |/              |/         a(j-index)
+  // kP_lll -------- kP_rll
+
+  double kP_lll, kP_llr, kP_lrl, kP_lrr, kP_rll, kP_rlr, kP_rrl, kP_rrr;
+  kP_lll = planck_table(kT_l, ja_l, iq_l);
+  kP_llr = planck_table(kT_l, ja_l, iq_r);
+  kP_lrl = planck_table(kT_l, ja_r, iq_l);
+  kP_lrr = planck_table(kT_l, ja_r, iq_r);
+  kP_rll = planck_table(kT_r, ja_l, iq_l);
+  kP_rlr = planck_table(kT_r, ja_l, iq_r);
+  kP_rrl = planck_table(kT_r, ja_r, iq_l);
+  kP_rrr = planck_table(kT_r, ja_r, iq_r);
+  // printf("Corner values: \n");
+  // printf("kP_lll= %.10e , kP_llr= %.10e \n", kP_lll, kP_llr);
+  // printf("kP_lrl= %.10e , kP_lrr= %.10e \n", kP_lrl, kP_lrr);
+  // printf("kP_rll= %.10e , kP_rlr= %.10e \n", kP_rll, kP_rlr);
+  // printf("kP_rrl= %.10e , kP_rrr= %.10e \n \n", kP_rrl, kP_rrr);
+
+  // collapse to index a, T using q weights
+  double kP_ll, kP_lr, kP_rl, kP_rr;
+  kP_ll = kP_lll * (1.-qd) + kP_llr * qd;
+  kP_lr = kP_lrl * (1.-qd) + kP_lrr * qd;
+  kP_rl = kP_rll * (1.-qd) + kP_rlr * qd;
+  kP_rr = kP_rrl * (1.-qd) + kP_rrr * qd;
+  // printf("Collapse along T: \n");
+  // printf("kP_ll= %.10e , kP_lr= %.10e ,kP_rl= %.10e , kP_rr= %.10e \n\n ", kP_ll, kP_lr, kP_rl, kP_rr);
+
+  // collapse to index T using amax weights
+  double kP_l, kP_r;
+  kP_l  = kP_ll * (1.-ad) + kP_lr * ad;
+  kP_r  = kP_rl * (1.-ad) + kP_rr * ad;
+  // printf("Collapse along a: \n");
+  // printf("kP_l= %.10e , kP_r= %.10e \n\n ", kP_l, kP_r);
+
+  // collapse to final value using T weights
+  double kP;
+  kP = kP_l * (1.-Td) + kP_r* Td;
+  // printf("Collapse along q: \n");
+  // printf("log(kP)= %.10e , kP= %.10e \n\n ", kP, std::pow(10.,kP));
+
+  kappa = std::pow(10.0,kP);
+}
+
 void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &prim,
     const AthenaArray<Real> &prim_df, AthenaArray<Real> &stopping_time) {
 
@@ -1499,18 +1738,25 @@ void DiskOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 }
 
 void MeshBlock::UserWorkInLoop() {
-  Real rad,phi,z,eps,q_d,amax,aint,as,sig_s,ns,tcool,rhod_tot,cs,vr_av,vth_av,vphi_av,rho_av,dV,vtot_rms;
+  Real rad,phi,z,eps,q_d,amax,aint,as,sig_s,ns,tcoll_d,tcoll_g,tpar,trelax,rhod_tot,cs,vr_av,vth_av,vphi_av,rho_av,dV,vtot_rms,Tg,ekin,pr,temis,kappa;
     for (int j=js; j<=je; ++j) {
       for (int i=is; i<=ie; ++i) {
         for (int k=ks; k<=ke; ++k) {
           GetCylCoord(pcoord, rad,phi,z, i,j,k);
+
+          // =========================================================================
+          // Calculate dust-gas collisional parameters for tcoll_g
+          // =========================================================================
           amax = pscalars->s(0,k,j,i)/pdustfluids->df_cons(4,k,j,i);
           aint = std::sqrt(amax*a_min);
           q_d   = std::log(pdustfluids->df_cons(4,k,j,i)/pdustfluids->df_cons(0,k,j,i))/std::log(amax/aint) - 4.; // power-law exponent
           if (q_d >= 0) q_d = std::min(q_d, 0.0);
           if (q_d  < 0) q_d = std::max(q_d, -10.0);
           
-          cs    = std::sqrt(phydro->u(IPR,k,j,i)/phydro->u(IDN,k,j,i)); 
+          ekin = .5/phydro->u(IDN,k,j,i)*(SQR(phydro->u(IM1,k,j,i))+SQR(phydro->u(IM2,k,j,i))+SQR(phydro->u(IM3,k,j,i)));
+          pr = (phydro->u(IEN,k,j,i) - ekin)*(gamma_gas-1.); 
+          
+          cs = std::sqrt(pr / phydro->u(IDN,k,j,i)); 
           rhod_tot = pdustfluids->df_cons(4,k,j,i) + pdustfluids->df_cons(0,k,j,i);
           if(q_d!=3.){
             as = a_min * (q_d+3.)/(q_d+4.) * (std::pow(amax/a_min,q_d+4)-1.)/(std::pow(amax/a_min,q_d+3)-1.); // Sauter mean radius 
@@ -1520,10 +1766,35 @@ void MeshBlock::UserWorkInLoop() {
          
           sig_s = PI*SQR(as);      // Sauter mean radius collision cross section
           ns    = rhod_tot * unit_rho / (4./3.*PI*rho_m*std::pow(as, 3.0)); // Sauter mean number density
-          tcool = std::min(500., std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+          tcoll_g = std::sqrt(PI/8.) * gamma_gas/(gamma_gas-1.) / (ns*sig_s*cs*unit_vel) / unit_time;
           
+          // =========================================================================
+          // Calculate tcoll_d
+          // =========================================================================
+          tcoll_d = (rhod_tot/phydro->u(IDN,k,j,i)) * (C_dust/Cp) * tcoll_g;
+          
+          // =========================================================================
+          // Calculate temis (optically thin emission timescale) from opacity table
+          // =========================================================================
+          Tg = SQR(cs*unit_vel)*mue*mp/kB;
+          opacity_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+          temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
+
+          // =========================================================================
+          // Calculate total nom-LTE thermal relaxation timescale
+          // =========================================================================
+          tpar   = 1./(1./temis + 1./tcoll_d + 1./tcoll_g);
+          trelax = 2.*tpar / (1. - std::sqrt(1.- 4*SQR(tpar)/(tcoll_g*temis)));
+          trelax = std::min(500., trelax * std::pow(rad,-1.5)) / std::pow(rad,-1.5);
+
+          // printf("%.10e, %.10e, %.10e, %.10e \n", tcoll_g, tcoll_d, temis, trelax);
+
           ruser_meshblock_data[3](k,j,i) = q_d;
-          ruser_meshblock_data[4](k,j,i) = tcool;
+          ruser_meshblock_data[4](k,j,i) = trelax;
+          ruser_meshblock_data[16](k,j,i) = tcoll_g;
+          ruser_meshblock_data[17](k,j,i) = tcoll_d;
+          ruser_meshblock_data[18](k,j,i) = temis;
+          ruser_meshblock_data[19](k,j,i) = kappa;
 
           // Calculate turbulent r.m.s. velocity
           
@@ -1568,7 +1839,7 @@ void MeshBlock::UserWorkInLoop() {
           ruser_meshblock_data[11](k,j,i)  = phydro->u(IM1,k,j,i)*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[11](k,j,i); // <rho*vr>
           ruser_meshblock_data[12](k,j,i) = (phydro->u(IM1,k,j,i)*(phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i)))*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[12](k,j,i); // <rho*vr*(vphi-vK)>
           ruser_meshblock_data[13](k,j,i) = (phydro->u(IM3,k,j,i)/phydro->u(IDN,k,j,i) - ruser_meshblock_data[2](k,j,i))*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[13](k,j,i); // <vphi-vK>
-          ruser_meshblock_data[14](k,j,i) = phydro->u(IPR,k,j,i)*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[14](k,j,i); // <P>
+          ruser_meshblock_data[14](k,j,i) = pr*smooth_const_alpha + (1.-smooth_const_alpha)*ruser_meshblock_data[14](k,j,i); // <P>
           ruser_meshblock_data[15](k,j,i) = (ruser_meshblock_data[12](k,j,i) - ruser_meshblock_data[11](k,j,i)*ruser_meshblock_data[13](k,j,i)) / ruser_meshblock_data[14](k,j,i); // alpha = (<rho*vr*(vphi-vK)> - <rho*vr><vphi-vK>) / <P>
           // printf("roll. av.=%.3e, vtot_rms=%.3e \n", i,j,k, ruser_meshblock_data[5](k,j,i), vtot_rms);
         }
@@ -1589,6 +1860,10 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin){
         user_out_var(3,k,j,i) = ruser_meshblock_data[15](k,j,i);
         user_out_var(4,k,j,i) = ruser_meshblock_data[6](k,j,i);
         user_out_var(5,k,j,i) = ruser_meshblock_data[7](k,j,i);
+        user_out_var(6,k,j,i) = ruser_meshblock_data[16](k,j,i) * std::pow(rad,-1.5);
+        user_out_var(7,k,j,i) = ruser_meshblock_data[17](k,j,i) * std::pow(rad,-1.5);
+        user_out_var(8,k,j,i) = ruser_meshblock_data[18](k,j,i) * std::pow(rad,-1.5);
+        user_out_var(9,k,j,i) = ruser_meshblock_data[19](k,j,i);
       }
     }
   }
