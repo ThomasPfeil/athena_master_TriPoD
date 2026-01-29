@@ -250,6 +250,44 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   fclose(f_T);
   // End Opacity Read-in 
 
+  // Opacity interpolation test
+  // Real amn=1e-6, amx=1e3, qmn=-5., qmx=-1., Tmn=1., Tmx=3000., dlTtest, dlatest, dqtest;
+  // int NA=200,NQ=100,NT=150;
+  // Real Ttest[NT], atest[NA], qtest[NQ];
+
+  // dlTtest = (std::log10(Tmx) - std::log10(Tmn))/(NT-1);
+  // dlatest = (std::log10(amx) - std::log10(amn))/(NA-1);
+  // dqtest = (qmx-qmn)/(NQ-1);
+
+  // Ttest[0] = std::log10(Tmn);
+  // for(int k=0; k<NT; ++k){
+  //   if(k>0) Ttest[k] = Ttest[k-1] + dlTtest;
+  // }
+  // atest[0] = std::log10(amn);
+  // for(int j=0; j<NA; ++j){
+  //   if(j>0) atest[j] = atest[j-1] + dlatest;
+  // }
+  // qtest[0] = qmn;
+  // for(int i=0; i<NQ; ++i){
+  //   if(i>0) qtest[i] = qtest[i-1] + dqtest;
+  // } 
+
+  // FILE * kFile;
+  // kFile = fopen("OpTest.txt","w+");
+  // Real kappa;
+  // Real kappa_arr[NT][NA][NQ];
+  // for(int k=0; k<NT; ++k){
+  //   for(int j=0; j<NA; ++j){
+  //     for(int i=0; i<NQ; ++i){
+  //       opacity_trilin(Ttest[k], atest[j], qtest[i], kappa);
+  //       kappa_arr[k][j][i] = kappa;
+  //       fprintf(kFile, "%.10e ", kappa);
+  //     }
+  //   }
+  // }
+  // fclose(kFile);
+  // throw std::runtime_error("Stop.");
+
   //===================================================================================
   // Start Code Unit Definition: Required for dust coagulation and cooling times
   //===================================================================================
