@@ -849,8 +849,8 @@ Real dv_tot(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Real z,
   } else {
     alpha_av = alpha_turb;
   }
-  Real Re    = alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
-  Real vn    = std::sqrt(alpha_av)*cs;
+  Real Re    = std::sqrt(0.5*PI) * alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
+  Real vn    = std::sqrt(1.5 * alpha_av)*cs;
   Real vs    = vn * std::pow(Re,-0.25);
   Real tn    = 1/omega;
   Real ts    = tn * std::pow(Re,-0.5);
@@ -906,8 +906,8 @@ Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Re
   //!
   //! ************************************************************************
   // ------------ Turbulent velocities --------------
-  Real Re    = alpha_turb * 2e-15 * rhog * cs / omega / (mp * mue);
-  Real vn    = std::sqrt(alpha_turb)*cs;
+  Real Re    = std::sqrt(0.5*PI) * alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
+  Real vn    = std::sqrt(1.5 * alpha_av)*cs;
   Real vs    = vn * std::pow(Re,-0.25);
   Real tn    = 1/omega;
   Real ts    = tn * std::pow(Re,-0.5);
