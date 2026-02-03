@@ -906,8 +906,8 @@ Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Re
   //!
   //! ************************************************************************
   // ------------ Turbulent velocities --------------
-  Real Re    = std::sqrt(0.5*PI) * alpha_av * 2e-15 * rhog * cs / omega / (mp * mue);
-  Real vn    = std::sqrt(1.5 * alpha_av)*cs;
+  Real Re    = std::sqrt(0.5*PI) * alpha_turb * 2e-15 * rhog * cs / omega / (mp * mue);
+  Real vn    = std::sqrt(1.5 * alpha_turb)*cs;
   Real vs    = vn * std::pow(Re,-0.25);
   Real tn    = 1/omega;
   Real ts    = tn * std::pow(Re,-0.5);
@@ -1368,9 +1368,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           tau_f  = rho_m / (std::sqrt(8.0/PI)*cs_i * rho);
           if(use_alpha_av){
             alpha_av = SQR((pmb->ruser_meshblock_data[5](k,j,i)*unit_vel+TINY_NUMBER)/cs_i);
-            Re = alpha_av * 2e-15 * rho * cs_i / Om_i / (mp * mue);
+            Re = std::sqrt(0.5*PI) * alpha_av * 2e-15 * rho * cs_i / Om_i / (mp * mue);
           } else {
-            Re = alpha_turb * 2e-15 * rho * cs_i / Om_i / (mp * mue);
+            Re = std::sqrt(0.5*PI) * alpha_turb * 2e-15 * rho * cs_i / Om_i / (mp * mue);
           }
           
           //--------------------------------------------------------------------------------------
@@ -1416,7 +1416,7 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           if(use_alpha_av){
             vgas = pmb->ruser_meshblock_data[5](k,j,i)*unit_vel + TINY_NUMBER;
           } else {
-            vgas = std::sqrt(alpha_turb)*cs_i;
+            vgas = std::sqrt(1.5 * alpha_turb)*cs_i;
           }
           vsmall   = vgas * std::sqrt((St_mx-St_mn)/(St_mx+St_mn) * (SQR(St_mx)/(St_mx+pow(Re,-0.5)) - SQR(St_mn)/(St_mn+pow(Re,-0.5))));
           vinter   = vgas * std::sqrt(2.292*St_mx);
@@ -1461,9 +1461,9 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
           //--------------------------------------------------------------------------------------
           //            Calculate the maximum size reduction if large dust is depleted
           //--------------------------------------------------------------------------------------
-          if(eps1<(0.425*(eps1+eps0))){ // inly if there is net mass loss in the cell
+          if(eps1<(0.495*(eps1+eps0))){ // inly if there is net mass loss in the cell
             // How much mass would we have to move if we want to preserve eps1=0.425*epstot
-            eps1_   = 0.425*(eps1+eps0);
+            eps1_   = 0.495*(eps1+eps0);
             epsdot_ = -(eps1_-eps1)/dt; // mass exchange rate to restore eps1=0.425*epstot one timestep
             tau     = fabs(eps1/epsdot_); // respective timescale
 
