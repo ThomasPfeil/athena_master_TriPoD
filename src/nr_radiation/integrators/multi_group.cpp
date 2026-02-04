@@ -73,13 +73,20 @@ void RadIntegrator::MapLabToCmFrequency(Real &tran_coef,
 void RadIntegrator::GetCmMCIntensity(AthenaArray<Real> &ir_cm,
                           AthenaArray<Real> &delta_nu_n, AthenaArray<Real> &ir_face) {
   int &nfreq = pmy_rad->nfreq;
-  if (nfreq > 1) {
+  if(nfreq > 1){
+    // no frequency center for the last bin
+    for(int ifr=0; ifr<nfreq-1; ++ifr){
+      ir_cen_(ifr) = ir_cm(ifr)/delta_nu_n(ifr);
+    }// end ir_n-cen
+    // get value at frequency grid face
     ir_face(0) = 0.0;
-    for (int ifr=1; ifr<nfreq; ++ifr) {
-      ir_face(ifr) = std::max(2.0*ir_cm(ifr-1)/delta_nu_n(ifr-1) -
-                                             ir_face(ifr-1), 0.0);
+    for(int ifr=1; ifr<nfreq-1; ++ifr){
+      Real d_nu = pmy_rad->nu_cen(ifr) - pmy_rad->nu_cen(ifr-1);
+      Real d_nu_face = pmy_rad->nu_grid(ifr) - pmy_rad->nu_cen(ifr-1);
+      // the cm_nu[n] factor is cancelled
+      ir_face(ifr) = ir_cen_(ifr-1) + (ir_cen_(ifr) - ir_cen_(ifr-1)) * d_nu_face/d_nu;
     }
-  }
+  }// end nfreq > 1
 }
 
 // general function to split any array in the frequency bin [\Gamma nu_f]
@@ -244,7 +251,8 @@ bool RadIntegrator::FreMapMatrix(AthenaArray<Real> &split_ratio,
   bool invertible = true;
   // first, check the diagonal elements are non-zero
   for (int ifr=0; ifr<nfreq; ++ifr) {
-    if (split_ratio(ifr,ifr-map_bin_start(ifr)) < TINY_NUMBER) {
+    int idx = std::abs(ifr - map_bin_start(ifr));
+    if (split_ratio(ifr,idx) < TINY_NUMBER) {
       invertible = false;
       return invertible;
     }
