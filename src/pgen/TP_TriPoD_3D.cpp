@@ -58,7 +58,8 @@ void dust_pert_eq_pow_BL19(Real rad, Real phi, Real z, Real St0, Real St1, Real 
 
 void get_idx(const Real minval, const Real maxval, const int SIZE, const Real value, int &idx);
 void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx);
-void opacity_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
@@ -93,11 +94,13 @@ static int NUM_T;
 static int NUM_AMAX; 
 static int NUM_Q;  // total number of frequency groups 
 static std::string opacity_dir;
-static std::string opacity_fname;
+static std::string planck_fname;
+static std::string rosseland_fname;
 static AthenaArray<Real> T_grid;
 static AthenaArray<Real> q_grid;
 static AthenaArray<Real> a_grid;
 static AthenaArray<Real> planck_table;
+static AthenaArray<Real> rosseland_table;
 
 } // namespace
 
@@ -192,15 +195,15 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // Start Opacity Read-in: Planck opacities for power-law grain size distributions
   //=====================================================================================
   opacity_dir   = pin->GetOrAddString("problem", "opacity_directory","./");
-  opacity_fname = pin->GetOrAddString("problem", "opacity_fname","");
+  planck_fname = pin->GetOrAddString("problem", "planck_fname","");
 
-  FILE *f_opacity;
-  if ( (f_opacity=fopen((opacity_dir + opacity_fname).c_str(),"r"))==NULL ){ 
+  FILE *f_planck;
+  if ( (f_planck=fopen((opacity_dir + planck_fname).c_str(),"r"))==NULL ){ 
     throw std::runtime_error("Failed to open opacity file.");
   }
-  fscanf(f_opacity,"%d",&NUM_T);
-  fscanf(f_opacity,"%d",&NUM_AMAX);
-  fscanf(f_opacity,"%d",&NUM_Q);
+  fscanf(f_planck,"%d",&NUM_T);
+  fscanf(f_planck,"%d",&NUM_AMAX);
+  fscanf(f_planck,"%d",&NUM_Q);
 
   T_grid.NewAthenaArray(NUM_T);
   a_grid.NewAthenaArray(NUM_AMAX);
@@ -210,12 +213,46 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   for(int k=0; k<NUM_T; ++k){
     for(int j=0; j<NUM_AMAX; ++j){
       for(int i=0; i<NUM_Q; ++i){
-        fscanf(f_opacity,"%lf",&(planck_table(k,j,i)));
+        fscanf(f_planck,"%lf",&(planck_table(k,j,i)));
       }
     }
   }
-  fclose(f_opacity);
+  fclose(f_planck);
 
+  //=====================================================================================
+  // Start Opacity Read-in: Rosseland opacities for power-law grain size distributions
+  //=====================================================================================
+  rosseland_fname = pin->GetOrAddString("problem", "rosseland_fname","");
+
+  FILE *f_rosseland;
+  if ( (f_rosseland=fopen((opacity_dir + rosseland_fname).c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open opacity file.");
+  }
+  // Check if table dimensions are the same for the Rosseland opacity
+  int NUM_T_check, NUM_AMAX_check, NUM_Q_check;
+  NUM_T_check = NUM_T;
+  NUM_AMAX_check = NUM_AMAX;
+  NUM_Q_check = NUM_Q;
+  fscanf(f_rosseland,"%d",&NUM_T);
+  fscanf(f_rosseland,"%d",&NUM_AMAX);
+  fscanf(f_rosseland,"%d",&NUM_Q);
+  if(NUM_T_check!=NUM_T || NUM_AMAX_check!=NUM_AMAX || NUM_Q_check!=NUM_Q){
+    throw std::runtime_error("Opacity grid of Planck and Rosseland do not agree.");
+  }
+  rosseland_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
+ 
+  for(int k=0; k<NUM_T; ++k){
+    for(int j=0; j<NUM_AMAX; ++j){
+      for(int i=0; i<NUM_Q; ++i){
+        fscanf(f_rosseland,"%lf",&(rosseland_table(k,j,i)));
+      }
+    }
+  }
+  fclose(f_rosseland);
+
+  //=====================================================================================
+  // Read table grid in q, amax, T
+  //=====================================================================================
   // Load q-grid
   FILE *f_q;
   if ( (f_q=fopen((opacity_dir + "q.txt").c_str(),"r"))==NULL ){ 
@@ -272,20 +309,35 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //   if(i>0) qtest[i] = qtest[i-1] + dqtest;
   // } 
 
-  // FILE * kFile;
-  // kFile = fopen("OpTest.txt","w+");
-  // Real kappa;
-  // Real kappa_arr[NT][NA][NQ];
+  // FILE * kPFile;
+  // kPFile = fopen("PlanckTest.txt","w+");
+  // Real kappaP;
+  // Real kappaP_arr[NT][NA][NQ];
   // for(int k=0; k<NT; ++k){
   //   for(int j=0; j<NA; ++j){
   //     for(int i=0; i<NQ; ++i){
-  //       opacity_trilin(Ttest[k], atest[j], qtest[i], kappa);
-  //       kappa_arr[k][j][i] = kappa;
-  //       fprintf(kFile, "%.10e ", kappa);
+  //       planck_trilin(Ttest[k], atest[j], qtest[i], kappaP);
+  //       kappaP_arr[k][j][i] = kappaP;
+  //       fprintf(kPFile, "%.10e ", kappaP);
   //     }
   //   }
   // }
-  // fclose(kFile);
+  // fclose(kPFile);
+
+  // FILE * kRFile;
+  // kRFile = fopen("RossTest.txt","w+");
+  // Real kappaR;
+  // Real kappaR_arr[NT][NA][NQ];
+  // for(int k=0; k<NT; ++k){
+  //   for(int j=0; j<NA; ++j){
+  //     for(int i=0; i<NQ; ++i){
+  //       rosseland_trilin(Ttest[k], atest[j], qtest[i], kappaR);
+  //       kappaR_arr[k][j][i] = kappaR;
+  //       fprintf(kRFile, "%.10e ", kappaR);
+  //     }
+  //   }
+  // }
+  // fclose(kRFile);
   // throw std::runtime_error("Stop.");
 
   //===================================================================================
@@ -460,7 +512,7 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         // Calculate temis (optically thin emission timescale) from opacity table
         // =========================================================================
         Tg = SQR(cs*unit_vel)*mue*mp/kB;
-        opacity_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+        planck_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
         temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
 
         // =========================================================================
@@ -947,12 +999,9 @@ Real dv_tot_bulk(Real a_0, Real a_1, Real dp, Real rhog, Real cs, Real omega, Re
 Real deps1da(Real epstot, Real amax, Real p)
 {
   Real xi   = p+4.0;
-  if(xi==0.0)
-  {
+  if(xi==0.0){
       return epstot * (std::log(amax*a_min)-std::log(amax)) / (amax*std::pow(std::log(amax)-std::log(a_min), 2.0));
-  }
-  else
-  {
+  }else{
       return epstot*xi * (0.5*std::pow(a_min,xi)*std::pow(amax*a_min,0.5*xi) + std::pow(amax,xi)*(0.5*(std::pow(amax*a_min, 0.5*xi) - std::pow(a_min,xi)))) / (amax*std::pow(std::pow(amax,xi) - std::pow(a_min,xi),2.));
   }
 }
@@ -983,7 +1032,7 @@ void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx){
   }
 }
 
-void opacity_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
   // Get indices
   int kT, ja, iq;
   get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
@@ -1075,6 +1124,100 @@ void opacity_trilin(const Real T_val, const Real a_val, const Real q_val, Real &
   // printf("log(kP)= %.10e , kP= %.10e \n\n ", kP, std::pow(10.,kP));
 
   kappa = std::pow(10.0,kP);
+}
+
+void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+  // Get indices
+  int kT, ja, iq;
+  get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
+  get_idx(a_grid(0), a_grid(NUM_AMAX-1), NUM_AMAX, a_val, ja);
+  get_idx(q_grid(0), q_grid(NUM_Q-1), NUM_Q, q_val, iq);
+
+  // Get edge indices of cells
+  int kT_l, ja_l, iq_l, kT_r, ja_r, iq_r;
+  get_edges(NUM_T, kT, kT_l, kT_r);
+  get_edges(NUM_AMAX, ja, ja_l, ja_r);
+  get_edges(NUM_Q, iq, iq_l, iq_r);
+  // printf("Edge Indices: \n");
+  // printf("%d %d %d %d %d %d \n \n", kT_l, kT_r, ja_l, ja_r,iq_l, iq_r);
+
+  // Get edge values
+  double T_l, T_r, a_l, a_r, q_l, q_r;
+  T_l = T_grid(kT_l);
+  T_r = T_grid(kT_r);
+  a_l = a_grid(ja_l);
+  a_r = a_grid(ja_r);
+  q_l = q_grid(iq_l);
+  q_r = q_grid(iq_r);
+  // printf("Edge Cell values: \n");
+  // printf("%.10e %.10e \n %.10e %.10e \n %.10e %.10e \n \n", T_l, T_r, a_l, a_r, q_l, q_r);
+
+
+  // Calculate fractional distances of interpolation points to edges
+  double Td, ad, qd, disT, disa, disq;
+  // Td = (T_val - T_l)/(T_r-T_l);
+  // ad = (a_val - a_l)/(a_r-a_l);
+  // qd = (q_val - q_l)/(q_r-q_l);
+  disT = (T_grid(NUM_T-1)-T_grid(0))/(NUM_T-1);
+  disa = ((a_grid(NUM_AMAX-1)-a_grid(0))/(NUM_AMAX-1));
+  disq = ((q_grid(NUM_Q-1)-q_grid(0))/(NUM_Q-1));
+  Td = (T_val - T_l)/disT;
+  ad = (a_val - a_l)/disa;
+  qd = (q_val - q_l)/disq;
+  // printf("Fractional distances: \n");
+  // printf("%.10e %.10e %.10e \n \n", Td, ad, qd);
+
+  //        kR_lrr -------- kR_rrr
+  //         /|               /|
+  //        / |              / |
+  //       /  |     P       /  |        q(i-index)
+  //      /   |     x      /   |        |
+  // kR_llr -------- kR_rlr    |        |
+  //      |   |           |    |        |
+  //      |   kR_lrl -----|-- kR_rrl    /-------T(k-index)
+  //      |  /            |  /         / 
+  //      | /             | /         / 
+  //      |/              |/         a(j-index)
+  // kR_lll -------- kR_rll
+
+  double kR_lll, kR_llr, kR_lrl, kR_lrr, kR_rll, kR_rlr, kR_rrl, kR_rrr;
+  kR_lll = rosseland_table(kT_l, ja_l, iq_l);
+  kR_llr = rosseland_table(kT_l, ja_l, iq_r);
+  kR_lrl = rosseland_table(kT_l, ja_r, iq_l);
+  kR_lrr = rosseland_table(kT_l, ja_r, iq_r);
+  kR_rll = rosseland_table(kT_r, ja_l, iq_l);
+  kR_rlr = rosseland_table(kT_r, ja_l, iq_r);
+  kR_rrl = rosseland_table(kT_r, ja_r, iq_l);
+  kR_rrr = rosseland_table(kT_r, ja_r, iq_r);
+  // printf("Corner values: \n");
+  // printf("kR_lll= %.10e , kR_llr= %.10e \n", kR_lll, kR_llr);
+  // printf("kR_lrl= %.10e , kR_lrr= %.10e \n", kR_lrl, kR_lrr);
+  // printf("kR_rll= %.10e , kR_rlr= %.10e \n", kR_rll, kR_rlr);
+  // printf("kR_rrl= %.10e , kR_rrr= %.10e \n \n", kR_rrl, kR_rrr);
+
+  // collapse to index a, T using q weights
+  double kR_ll, kR_lr, kR_rl, kR_rr;
+  kR_ll = kR_lll * (1.-qd) + kR_llr * qd;
+  kR_lr = kR_lrl * (1.-qd) + kR_lrr * qd;
+  kR_rl = kR_rll * (1.-qd) + kR_rlr * qd;
+  kR_rr = kR_rrl * (1.-qd) + kR_rrr * qd;
+  // printf("Collapse along T: \n");
+  // printf("kR_ll= %.10e , kR_lr= %.10e ,kR_rl= %.10e , kR_rr= %.10e \n\n ", kR_ll, kR_lr, kR_rl, kR_rr);
+
+  // collapse to index T using amax weights
+  double kR_l, kR_r;
+  kR_l  = kR_ll * (1.-ad) + kR_lr * ad;
+  kR_r  = kR_rl * (1.-ad) + kR_rr * ad;
+  // printf("Collapse along a: \n");
+  // printf("kR_l= %.10e , kR_r= %.10e \n\n ", kR_l, kR_r);
+
+  // collapse to final value using T weights
+  double kR;
+  kR = kR_l * (1.-Td) + kR_r* Td;
+  // printf("Collapse along q: \n");
+  // printf("log(kR)= %.10e , kR= %.10e \n\n ", kR, std::pow(10.,kR));
+
+  kappa = std::pow(10.0,kR);
 }
 
 void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &prim,
@@ -1815,7 +1958,7 @@ void MeshBlock::UserWorkInLoop() {
           // Calculate temis (optically thin emission timescale) from opacity table
           // =========================================================================
           Tg = SQR(cs*unit_vel)*mue*mp/kB;
-          opacity_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+          planck_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
           temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
 
           // =========================================================================
