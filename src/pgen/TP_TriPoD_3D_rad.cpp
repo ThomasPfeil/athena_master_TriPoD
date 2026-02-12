@@ -60,6 +60,7 @@ void get_idx(const Real minval, const Real maxval, const int SIZE, const Real va
 void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx);
 void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
@@ -96,11 +97,13 @@ static int NUM_Q;  // total number of frequency groups
 static std::string opacity_dir;
 static std::string planck_fname;
 static std::string rosseland_fname;
+static std::string scatter_fname;
 static AthenaArray<Real> T_grid;
 static AthenaArray<Real> q_grid;
 static AthenaArray<Real> a_grid;
 static AthenaArray<Real> planck_table;
 static AthenaArray<Real> rosseland_table;
+static AthenaArray<Real> scatter_table;
 
 } // namespace
 
@@ -251,6 +254,36 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   fclose(f_rosseland);
 
   //=====================================================================================
+  // Start Opacity Read-in: Scattering opacities for power-law grain size distributions
+  //=====================================================================================
+  scatter_fname = pin->GetOrAddString("problem", "scatter_fname","");
+
+  FILE *f_scatter;
+  if ( (f_scatter=fopen((opacity_dir + scatter_fname).c_str(),"r"))==NULL ){ 
+    throw std::runtime_error("Failed to open opacity file.");
+  }
+  // Check if table dimensions are the same for the scatter opacity
+  NUM_T_check = NUM_T;
+  NUM_AMAX_check = NUM_AMAX;
+  NUM_Q_check = NUM_Q;
+  fscanf(f_scatter,"%d",&NUM_T);
+  fscanf(f_scatter,"%d",&NUM_AMAX);
+  fscanf(f_scatter,"%d",&NUM_Q);
+  if(NUM_T_check!=NUM_T || NUM_AMAX_check!=NUM_AMAX || NUM_Q_check!=NUM_Q){
+    throw std::runtime_error("Opacity grid of Planck and scatter do not agree.");
+  }
+  scatter_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
+ 
+  for(int k=0; k<NUM_T; ++k){
+    for(int j=0; j<NUM_AMAX; ++j){
+      for(int i=0; i<NUM_Q; ++i){
+        fscanf(f_scatter,"%lf",&(scatter_table(k,j,i)));
+      }
+    }
+  }
+  fclose(f_scatter);
+
+  //=====================================================================================
   // Read table grid in q, amax, T
   //=====================================================================================
   // Load q-grid
@@ -288,56 +321,71 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   // End Opacity Read-in 
 
   // Opacity interpolation test
-  // Real amn=1e-6, amx=1e3, qmn=-5., qmx=-1., Tmn=1., Tmx=3000., dlTtest, dlatest, dqtest;
-  // int NA=200,NQ=100,NT=150;
-  // Real Ttest[NT], atest[NA], qtest[NQ];
+  Real amn=1e-6, amx=1e3, qmn=-5., qmx=-1., Tmn=1., Tmx=3000., dlTtest, dlatest, dqtest;
+  int NA=200,NQ=100,NT=150;
+  Real Ttest[NT], atest[NA], qtest[NQ];
 
-  // dlTtest = (std::log10(Tmx) - std::log10(Tmn))/(NT-1);
-  // dlatest = (std::log10(amx) - std::log10(amn))/(NA-1);
-  // dqtest = (qmx-qmn)/(NQ-1);
+  dlTtest = (std::log10(Tmx) - std::log10(Tmn))/(NT-1);
+  dlatest = (std::log10(amx) - std::log10(amn))/(NA-1);
+  dqtest = (qmx-qmn)/(NQ-1);
 
-  // Ttest[0] = std::log10(Tmn);
-  // for(int k=0; k<NT; ++k){
-  //   if(k>0) Ttest[k] = Ttest[k-1] + dlTtest;
-  // }
-  // atest[0] = std::log10(amn);
-  // for(int j=0; j<NA; ++j){
-  //   if(j>0) atest[j] = atest[j-1] + dlatest;
-  // }
-  // qtest[0] = qmn;
-  // for(int i=0; i<NQ; ++i){
-  //   if(i>0) qtest[i] = qtest[i-1] + dqtest;
-  // } 
+  Ttest[0] = std::log10(Tmn);
+  for(int k=0; k<NT; ++k){
+    if(k>0) Ttest[k] = Ttest[k-1] + dlTtest;
+  }
+  atest[0] = std::log10(amn);
+  for(int j=0; j<NA; ++j){
+    if(j>0) atest[j] = atest[j-1] + dlatest;
+  }
+  qtest[0] = qmn;
+  for(int i=0; i<NQ; ++i){
+    if(i>0) qtest[i] = qtest[i-1] + dqtest;
+  } 
 
-  // FILE * kPFile;
-  // kPFile = fopen("PlanckTest.txt","w+");
-  // Real kappaP;
-  // Real kappaP_arr[NT][NA][NQ];
-  // for(int k=0; k<NT; ++k){
-  //   for(int j=0; j<NA; ++j){
-  //     for(int i=0; i<NQ; ++i){
-  //       planck_trilin(Ttest[k], atest[j], qtest[i], kappaP);
-  //       kappaP_arr[k][j][i] = kappaP;
-  //       fprintf(kPFile, "%.10e ", kappaP);
-  //     }
-  //   }
-  // }
-  // fclose(kPFile);
+  FILE * kPFile;
+  kPFile = fopen("PlanckTest.txt","w+");
+  Real kappaP;
+  Real kappaP_arr[NT][NA][NQ];
+  for(int k=0; k<NT; ++k){
+    for(int j=0; j<NA; ++j){
+      for(int i=0; i<NQ; ++i){
+        planck_trilin(Ttest[k], atest[j], qtest[i], kappaP);
+        kappaP_arr[k][j][i] = kappaP;
+        fprintf(kPFile, "%.10e ", kappaP);
+      }
+    }
+  }
+  fclose(kPFile);
 
-  // FILE * kRFile;
-  // kRFile = fopen("RossTest.txt","w+");
-  // Real kappaR;
-  // Real kappaR_arr[NT][NA][NQ];
-  // for(int k=0; k<NT; ++k){
-  //   for(int j=0; j<NA; ++j){
-  //     for(int i=0; i<NQ; ++i){
-  //       rosseland_trilin(Ttest[k], atest[j], qtest[i], kappaR);
-  //       kappaR_arr[k][j][i] = kappaR;
-  //       fprintf(kRFile, "%.10e ", kappaR);
-  //     }
-  //   }
-  // }
-  // fclose(kRFile);
+  FILE * kRFile;
+  kRFile = fopen("RossTest.txt","w+");
+  Real kappaR;
+  Real kappaR_arr[NT][NA][NQ];
+  for(int k=0; k<NT; ++k){
+    for(int j=0; j<NA; ++j){
+      for(int i=0; i<NQ; ++i){
+        rosseland_trilin(Ttest[k], atest[j], qtest[i], kappaR);
+        kappaR_arr[k][j][i] = kappaR;
+        fprintf(kRFile, "%.10e ", kappaR);
+      }
+    }
+  }
+  fclose(kRFile);
+
+  FILE * kSFile;
+  kSFile = fopen("ScatterTest.txt","w+");
+  Real kappaS;
+  Real kappaS_arr[NT][NA][NQ];
+  for(int k=0; k<NT; ++k){
+    for(int j=0; j<NA; ++j){
+      for(int i=0; i<NQ; ++i){
+        scatter_trilin(Ttest[k], atest[j], qtest[i], kappaS);
+        kappaS_arr[k][j][i] = kappaS;
+        fprintf(kSFile, "%.10e ", kappaS);
+      }
+    }
+  }
+  fclose(kSFile);
   // throw std::runtime_error("Stop.");
 
   //===================================================================================
@@ -1124,6 +1172,100 @@ void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &k
   // printf("log(kP)= %.10e , kP= %.10e \n\n ", kP, std::pow(10.,kP));
 
   kappa = std::pow(10.0,kP);
+}
+
+void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+  // Get indices
+  int kT, ja, iq;
+  get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
+  get_idx(a_grid(0), a_grid(NUM_AMAX-1), NUM_AMAX, a_val, ja);
+  get_idx(q_grid(0), q_grid(NUM_Q-1), NUM_Q, q_val, iq);
+
+  // Get edge indices of cells
+  int kT_l, ja_l, iq_l, kT_r, ja_r, iq_r;
+  get_edges(NUM_T, kT, kT_l, kT_r);
+  get_edges(NUM_AMAX, ja, ja_l, ja_r);
+  get_edges(NUM_Q, iq, iq_l, iq_r);
+  // printf("Edge Indices: \n");
+  // printf("%d %d %d %d %d %d \n \n", kT_l, kT_r, ja_l, ja_r,iq_l, iq_r);
+
+  // Get edge values
+  double T_l, T_r, a_l, a_r, q_l, q_r;
+  T_l = T_grid(kT_l);
+  T_r = T_grid(kT_r);
+  a_l = a_grid(ja_l);
+  a_r = a_grid(ja_r);
+  q_l = q_grid(iq_l);
+  q_r = q_grid(iq_r);
+  // printf("Edge Cell values: \n");
+  // printf("%.10e %.10e \n %.10e %.10e \n %.10e %.10e \n \n", T_l, T_r, a_l, a_r, q_l, q_r);
+
+
+  // Calculate fractional distances of interpolation points to edges
+  double Td, ad, qd, disT, disa, disq;
+  // Td = (T_val - T_l)/(T_r-T_l);
+  // ad = (a_val - a_l)/(a_r-a_l);
+  // qd = (q_val - q_l)/(q_r-q_l);
+  disT = (T_grid(NUM_T-1)-T_grid(0))/(NUM_T-1);
+  disa = ((a_grid(NUM_AMAX-1)-a_grid(0))/(NUM_AMAX-1));
+  disq = ((q_grid(NUM_Q-1)-q_grid(0))/(NUM_Q-1));
+  Td = (T_val - T_l)/disT;
+  ad = (a_val - a_l)/disa;
+  qd = (q_val - q_l)/disq;
+  // printf("Fractional distances: \n");
+  // printf("%.10e %.10e %.10e \n \n", Td, ad, qd);
+
+  //        kS_lrr -------- kS_rrr
+  //         /|               /|
+  //        / |              / |
+  //       /  |     P       /  |        q(i-index)
+  //      /   |     x      /   |        |
+  // kS_llr -------- kS_rlr    |        |
+  //      |   |           |    |        |
+  //      |   kS_lrl -----|-- kS_rrl    /-------T(k-index)
+  //      |  /            |  /         / 
+  //      | /             | /         / 
+  //      |/              |/         a(j-index)
+  // kS_lll -------- kS_rll
+
+  double kS_lll, kS_llr, kS_lrl, kS_lrr, kS_rll, kS_rlr, kS_rrl, kS_rrr;
+  kS_lll = scatter_table(kT_l, ja_l, iq_l);
+  kS_llr = scatter_table(kT_l, ja_l, iq_r);
+  kS_lrl = scatter_table(kT_l, ja_r, iq_l);
+  kS_lrr = scatter_table(kT_l, ja_r, iq_r);
+  kS_rll = scatter_table(kT_r, ja_l, iq_l);
+  kS_rlr = scatter_table(kT_r, ja_l, iq_r);
+  kS_rrl = scatter_table(kT_r, ja_r, iq_l);
+  kS_rrr = scatter_table(kT_r, ja_r, iq_r);
+  // printf("Corner values: \n");
+  // printf("kS_lll= %.10e , kS_llr= %.10e \n", kS_lll, kS_llr);
+  // printf("kS_lrl= %.10e , kS_lrr= %.10e \n", kS_lrl, kS_lrr);
+  // printf("kS_rll= %.10e , kS_rlr= %.10e \n", kS_rll, kS_rlr);
+  // printf("kS_rrl= %.10e , kS_rrr= %.10e \n \n", kS_rrl, kS_rrr);
+
+  // collapse to index a, T using q weights
+  double kS_ll, kS_lr, kS_rl, kS_rr;
+  kS_ll = kS_lll * (1.-qd) + kS_llr * qd;
+  kS_lr = kS_lrl * (1.-qd) + kS_lrr * qd;
+  kS_rl = kS_rll * (1.-qd) + kS_rlr * qd;
+  kS_rr = kS_rrl * (1.-qd) + kS_rrr * qd;
+  // printf("Collapse along T: \n");
+  // printf("kS_ll= %.10e , kS_lr= %.10e ,kS_rl= %.10e , kS_rr= %.10e \n\n ", kS_ll, kS_lr, kS_rl, kS_rr);
+
+  // collapse to index T using amax weights
+  double kS_l, kS_r;
+  kS_l  = kS_ll * (1.-ad) + kS_lr * ad;
+  kS_r  = kS_rl * (1.-ad) + kS_rr * ad;
+  // printf("Collapse along a: \n");
+  // printf("kS_l= %.10e , kS_r= %.10e \n\n ", kS_l, kS_r);
+
+  // collapse to final value using T weights
+  double kS;
+  kS = kS_l * (1.-Td) + kS_r* Td;
+  // printf("Collapse along q: \n");
+  // printf("log(kS)= %.10e , kS= %.10e \n\n ", kS, std::pow(10.,kS));
+
+  kappa = std::pow(10.0,kS);
 }
 
 void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
