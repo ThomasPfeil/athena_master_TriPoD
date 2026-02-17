@@ -58,9 +58,9 @@ void dust_pert_eq_pow_BL19(Real rad, Real phi, Real z, Real St0, Real St1, Real 
 
 void get_idx(const Real minval, const Real maxval, const int SIZE, const Real value, int &idx);
 void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx);
-void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
-void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
-void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void planck_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void rosseland_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void scatter_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
@@ -88,6 +88,7 @@ Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
 Real sfac, afac, C_dust;
+int nfreq;
 bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile, use_alpha_av;
 
 // Opacity data structures
@@ -98,6 +99,7 @@ static std::string opacity_dir;
 static std::string planck_fname;
 static std::string rosseland_fname;
 static std::string scatter_fname;
+static std::string fend;
 static AthenaArray<Real> T_grid;
 static AthenaArray<Real> q_grid;
 static AthenaArray<Real> a_grid;
@@ -186,6 +188,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   eps_floor  = pin->GetReal("problem","eps_floor");
   C_dust     = pin->GetReal("problem","SpecHeatDust");
 
+  nfreq = pin->GetOrAddInteger("radiation", "n_frequency", 1);
+
   th_min = pin->GetReal("mesh","x2min");
   th_max = pin->GetReal("mesh","x2max");
   dsize  = pin->GetReal("problem","dsize");
@@ -197,99 +201,155 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   //=====================================================================================
   // Start Opacity Read-in: Planck opacities for power-law grain size distributions
   //=====================================================================================
-  opacity_dir   = pin->GetOrAddString("problem", "opacity_directory","./");
-  planck_fname = pin->GetOrAddString("problem", "planck_fname","");
+  opacity_dir     = pin->GetOrAddString("radiation", "opacity_directory","./");
+  planck_fname    = pin->GetOrAddString("radiation", "planck_fname","");
+  rosseland_fname = pin->GetOrAddString("radiation", "rosseland_fname","");
+  scatter_fname   = pin->GetOrAddString("radiation", "scatter_fname","");
+  fend            = pin->GetOrAddString("radiation", "fend",".txt");
 
   FILE *f_planck;
-  if ( (f_planck=fopen((opacity_dir + planck_fname).c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open opacity file.");
-  }
-  fscanf(f_planck,"%d",&NUM_T);
-  fscanf(f_planck,"%d",&NUM_AMAX);
-  fscanf(f_planck,"%d",&NUM_Q);
-
-  T_grid.NewAthenaArray(NUM_T);
-  a_grid.NewAthenaArray(NUM_AMAX);
-  q_grid.NewAthenaArray(NUM_Q);
-  planck_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
- 
-  for(int k=0; k<NUM_T; ++k){
-    for(int j=0; j<NUM_AMAX; ++j){
-      for(int i=0; i<NUM_Q; ++i){
-        fscanf(f_planck,"%lf",&(planck_table(k,j,i)));
-      }
-    }
-  }
-  fclose(f_planck);
-
-  //=====================================================================================
-  // Start Opacity Read-in: Rosseland opacities for power-law grain size distributions
-  //=====================================================================================
-  rosseland_fname = pin->GetOrAddString("problem", "rosseland_fname","");
-
   FILE *f_rosseland;
-  if ( (f_rosseland=fopen((opacity_dir + rosseland_fname).c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open opacity file.");
-  }
-  // Check if table dimensions are the same for the Rosseland opacity
-  int NUM_T_check, NUM_AMAX_check, NUM_Q_check;
-  NUM_T_check = NUM_T;
-  NUM_AMAX_check = NUM_AMAX;
-  NUM_Q_check = NUM_Q;
-  fscanf(f_rosseland,"%d",&NUM_T);
-  fscanf(f_rosseland,"%d",&NUM_AMAX);
-  fscanf(f_rosseland,"%d",&NUM_Q);
-  if(NUM_T_check!=NUM_T || NUM_AMAX_check!=NUM_AMAX || NUM_Q_check!=NUM_Q){
-    throw std::runtime_error("Opacity grid of Planck and Rosseland do not agree.");
-  }
-  rosseland_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
- 
-  for(int k=0; k<NUM_T; ++k){
-    for(int j=0; j<NUM_AMAX; ++j){
-      for(int i=0; i<NUM_Q; ++i){
-        fscanf(f_rosseland,"%lf",&(rosseland_table(k,j,i)));
-      }
-    }
-  }
-  fclose(f_rosseland);
-
-  //=====================================================================================
-  // Start Opacity Read-in: Scattering opacities for power-law grain size distributions
-  //=====================================================================================
-  scatter_fname = pin->GetOrAddString("problem", "scatter_fname","");
-
   FILE *f_scatter;
-  if ( (f_scatter=fopen((opacity_dir + scatter_fname).c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open opacity file.");
-  }
-  // Check if table dimensions are the same for the scatter opacity
-  NUM_T_check = NUM_T;
-  NUM_AMAX_check = NUM_AMAX;
-  NUM_Q_check = NUM_Q;
-  fscanf(f_scatter,"%d",&NUM_T);
-  fscanf(f_scatter,"%d",&NUM_AMAX);
-  fscanf(f_scatter,"%d",&NUM_Q);
-  if(NUM_T_check!=NUM_T || NUM_AMAX_check!=NUM_AMAX || NUM_Q_check!=NUM_Q){
-    throw std::runtime_error("Opacity grid of Planck and scatter do not agree.");
-  }
-  scatter_table.NewAthenaArray(NUM_T,NUM_AMAX,NUM_Q);
- 
-  for(int k=0; k<NUM_T; ++k){
-    for(int j=0; j<NUM_AMAX; ++j){
-      for(int i=0; i<NUM_Q; ++i){
-        fscanf(f_scatter,"%lf",&(scatter_table(k,j,i)));
+
+  // Check if files are there and can be opened
+  // Also read in and check table dimensions
+  int check_NT, check_NA, check_NQ;
+  for(int l=0; l<nfreq; l++){
+    if(nfreq==1){
+      std::cout << "Check gray opacity: " + opacity_dir + planck_fname + fend << std::endl;
+      if ( (f_planck=fopen((opacity_dir + planck_fname + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + planck_fname + fend << std::endl;
+        throw std::runtime_error("Failed to open Planck opacity file.");
+      }
+      if ( (f_rosseland=fopen((opacity_dir + rosseland_fname + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + rosseland_fname + fend << std::endl;
+        throw std::runtime_error("Failed to open Rosseland opacity file.");
+      }
+      if ( (f_scatter=fopen((opacity_dir + scatter_fname + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + scatter_fname + fend << std::endl;
+        throw std::runtime_error("Failed to open Scatter opacity file.");
+      }
+    }else if(nfreq>1) {
+      std::cout << "Check multigroup opacity file: " + opacity_dir + planck_fname + "_" + std::to_string(l) + fend << std::endl;
+      if ( (f_planck=fopen((opacity_dir + planck_fname + "_" + std::to_string(l) + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + planck_fname + "_" + std::to_string(l) + fend << std::endl;
+        throw std::runtime_error("Failed to open Planck opacity file.");
+      }
+      if ( (f_rosseland=fopen((opacity_dir + rosseland_fname + "_" + std::to_string(l) + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + rosseland_fname + "_" + std::to_string(l) + fend << std::endl;
+        throw std::runtime_error("Failed to open Rosseland opacity file.");
+      }
+      if ( (f_scatter=fopen((opacity_dir + scatter_fname + "_" + std::to_string(l) + fend).c_str(),"r"))==NULL ){ 
+        std::cout << opacity_dir + scatter_fname + "_" + std::to_string(l) + fend << std::endl;
+        throw std::runtime_error("Failed to open Scatter opacity file.");
       }
     }
+    // Read in table dimensions from all files and check if consistent 
+    fscanf(f_planck,"%d",&NUM_T);
+    fscanf(f_planck,"%d",&NUM_AMAX);
+    fscanf(f_planck,"%d",&NUM_Q);
+    if(l==0){
+      check_NT = NUM_T;
+      check_NA = NUM_AMAX;
+      check_NQ = NUM_Q;
+    }
+    fscanf(f_rosseland,"%d",&NUM_T);
+    fscanf(f_rosseland,"%d",&NUM_AMAX);
+    fscanf(f_rosseland,"%d",&NUM_Q);
+    if(check_NT!=NUM_T || check_NA!=NUM_AMAX || check_NQ!=NUM_Q){
+      throw std::runtime_error("File dimensions don't agree (planck and rosseland).");
+    }
+    fscanf(f_scatter,"%d",&NUM_T);
+    fscanf(f_scatter,"%d",&NUM_AMAX);
+    fscanf(f_scatter,"%d",&NUM_Q);
+    if(check_NT!=NUM_T || check_NA!=NUM_AMAX || check_NQ!=NUM_Q){
+      throw std::runtime_error("File dimensions don't agree (rosseland and scatter).");
+    }
   }
+  // Close files
+  fclose(f_planck);
+  fclose(f_rosseland);
   fclose(f_scatter);
+  printf("Dimensions of files match: %d x %d x %d \n", NUM_T, NUM_AMAX, NUM_Q);
+
+  // Allocate memory
+  planck_table.NewAthenaArray(nfreq, NUM_T,NUM_AMAX,NUM_Q);
+  rosseland_table.NewAthenaArray(nfreq, NUM_T,NUM_AMAX,NUM_Q);
+  scatter_table.NewAthenaArray(nfreq, NUM_T,NUM_AMAX,NUM_Q);
+
+  // Begin actual opacity read-in
+  for(int l=0; l<nfreq; l++){
+    // If multi-band opacities are used: adjust file name and read in first 3 lines again (table dimensions)
+    if(nfreq>1){
+      f_planck=fopen((opacity_dir + planck_fname + "_" + std::to_string(l) + fend).c_str(),"r");
+      fscanf(f_planck,"%d",&NUM_T);
+      fscanf(f_planck,"%d",&NUM_AMAX);
+      fscanf(f_planck,"%d",&NUM_Q);
+
+      f_rosseland=fopen((opacity_dir + rosseland_fname + "_" + std::to_string(l) + fend).c_str(),"r");
+      fscanf(f_rosseland,"%d",&NUM_T);
+      fscanf(f_rosseland,"%d",&NUM_AMAX);
+      fscanf(f_rosseland,"%d",&NUM_Q);
+
+      f_scatter=fopen((opacity_dir + scatter_fname + "_" + std::to_string(l) + fend).c_str(),"r");
+      fscanf(f_scatter,"%d",&NUM_T);
+      fscanf(f_scatter,"%d",&NUM_AMAX);
+      fscanf(f_scatter,"%d",&NUM_Q);
+      
+      std::cout << "Loading multigroup opacity: " + opacity_dir + planck_fname + "_" + std::to_string(l) + fend << std::endl;
+    } else if(nfreq==1){
+      f_planck=fopen((opacity_dir + planck_fname + fend).c_str(),"r");
+      fscanf(f_planck,"%d",&NUM_T);
+      fscanf(f_planck,"%d",&NUM_AMAX);
+      fscanf(f_planck,"%d",&NUM_Q);
+
+      f_rosseland=fopen((opacity_dir + rosseland_fname + fend).c_str(),"r");
+      fscanf(f_rosseland,"%d",&NUM_T);
+      fscanf(f_rosseland,"%d",&NUM_AMAX);
+      fscanf(f_rosseland,"%d",&NUM_Q);
+
+      f_scatter=fopen((opacity_dir + scatter_fname + fend).c_str(),"r");      
+      fscanf(f_scatter,"%d",&NUM_T);
+      fscanf(f_scatter,"%d",&NUM_AMAX);
+      fscanf(f_scatter,"%d",&NUM_Q);
+
+      std::cout << "Loading gray opacities: " + opacity_dir + planck_fname + fend << std::endl;
+    }
+    for(int k=0; k<NUM_T; ++k){
+      for(int j=0; j<NUM_AMAX; ++j){
+        for(int i=0; i<NUM_Q; ++i){
+          fscanf(f_planck,"%lf",&(planck_table(l,k,j,i)));
+          fscanf(f_rosseland,"%lf",&(rosseland_table(l,k,j,i)));
+          fscanf(f_scatter,"%lf",&(scatter_table(l,k,j,i)));
+        }
+      }
+    }
+    // Close files
+    fclose(f_planck);
+    fclose(f_rosseland);
+    fclose(f_scatter);
+  }
 
   //=====================================================================================
   // Read table grid in q, amax, T
   //=====================================================================================
+  // Allocate memory for table grid
+  T_grid.NewAthenaArray(NUM_T);
+  a_grid.NewAthenaArray(NUM_AMAX);
+  q_grid.NewAthenaArray(NUM_Q);
+
   // Load q-grid
   FILE *f_q;
-  if ( (f_q=fopen((opacity_dir + "q.txt").c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open q-file.");
+  if(nfreq>1){
+    if ( (f_q=fopen((opacity_dir + "q_multi.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "q_multi.txt" << std::endl;
+      throw std::runtime_error("Failed to open q-file.");
+    }
+  } else if(nfreq==1){
+    if ( (f_q=fopen((opacity_dir + "q.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "q.txt" << std::endl;
+      throw std::runtime_error("Failed to open q-file.");
+    }
   }
   for(int i=0; i<NUM_Q; ++i){
     fscanf(f_q,"%lf",&(q_grid(i)));
@@ -299,8 +359,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // Load amax-grid
   FILE *f_amax;
-  if ( (f_amax=fopen((opacity_dir + "amax.txt").c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open amax-file.");
+  if(nfreq>1){
+    if ( (f_amax=fopen((opacity_dir + "amax_multi.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "amax_multi.txt" << std::endl;
+      throw std::runtime_error("Failed to open amax-file.");
+    }
+  } else if(nfreq==1) {
+    if ( (f_amax=fopen((opacity_dir + "amax.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "amax.txt" << std::endl;
+      throw std::runtime_error("Failed to open amax-file.");
+    }
   }
   for(int j=0; j<NUM_AMAX; ++j){
     fscanf(f_amax,"%lf",&(a_grid(j)));
@@ -310,8 +378,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // Load T-grid
   FILE *f_T;
-  if ( (f_T=fopen((opacity_dir + "T.txt").c_str(),"r"))==NULL ){ 
-    throw std::runtime_error("Failed to open T-file.");
+  if(nfreq>1){
+    if ( (f_T=fopen((opacity_dir + "T_multi.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "T_multi.txt" << std::endl;
+      throw std::runtime_error("Failed to open T-file.");
+    }
+  }else if(nfreq=1){
+    if ( (f_T=fopen((opacity_dir + "T.txt").c_str(),"r"))==NULL ){ 
+      std::cout << opacity_dir + "T.txt" << std::endl;
+      throw std::runtime_error("Failed to open T-file.");
+    }
   }
   for(int k=0; k<NUM_T; ++k){
     fscanf(f_T,"%lf",&(T_grid(k)));
@@ -320,7 +396,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   fclose(f_T);
   // End Opacity Read-in 
 
-  // Opacity interpolation test
+
+  //===================================================================================
+  // Opacity Interpolation Test: Interpolate tables on grids, save as file/s
+  //===================================================================================
   Real amn=1e-6, amx=1e3, qmn=-5., qmx=-1., Tmn=1., Tmx=3000., dlTtest, dlatest, dqtest;
   int NA=200,NQ=100,NT=150;
   Real Ttest[NT], atest[NA], qtest[NQ];
@@ -342,51 +421,46 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     if(i>0) qtest[i] = qtest[i-1] + dqtest;
   } 
 
-  FILE * kPFile;
-  kPFile = fopen("PlanckTest.txt","w+");
-  Real kappaP;
-  Real kappaP_arr[NT][NA][NQ];
-  for(int k=0; k<NT; ++k){
-    for(int j=0; j<NA; ++j){
-      for(int i=0; i<NQ; ++i){
-        planck_trilin(Ttest[k], atest[j], qtest[i], kappaP);
-        kappaP_arr[k][j][i] = kappaP;
-        fprintf(kPFile, "%.10e ", kappaP);
-      }
+  Real kappaP, kappaR, kappaS;
+  Real kappaP_arr[nfreq][NT][NA][NQ], kappaR_arr[nfreq][NT][NA][NQ], kappaS_arr[nfreq][NT][NA][NQ];
+  for(int l=0; l<nfreq; ++l){
+    FILE * kPFile;
+    FILE * kRFile;
+    FILE * kSFile;
+    if(nfreq==1){
+      printf("Running interpolation test on a grid, gray opacities \n");
+      kPFile = fopen("PlanckTest.txt","w+");
+      kRFile = fopen("RossTest.txt","w+");
+      kSFile = fopen("ScatterTest.txt","w+");
+    }else if(nfreq>1){
+      printf("Running interpolation test on a grid, freq. bin %d \n", l);
+      kPFile = fopen(("PlanckTest_" + std::to_string(l) + fend).c_str(),"w+");
+      kRFile = fopen(("RossTest_" + std::to_string(l) + fend).c_str(),"w+");
+      kSFile = fopen(("ScatterTest_" + std::to_string(l) + fend).c_str(),"w+");
     }
-  }
-  fclose(kPFile);
+    for(int k=0; k<NT; ++k){
+      for(int j=0; j<NA; ++j){
+        for(int i=0; i<NQ; ++i){
+          planck_trilin(l, Ttest[k], atest[j], qtest[i], kappaP);
+          kappaP_arr[l][k][j][i] = kappaP;
+          fprintf(kPFile, "%.10e ", kappaP);
 
-  FILE * kRFile;
-  kRFile = fopen("RossTest.txt","w+");
-  Real kappaR;
-  Real kappaR_arr[NT][NA][NQ];
-  for(int k=0; k<NT; ++k){
-    for(int j=0; j<NA; ++j){
-      for(int i=0; i<NQ; ++i){
-        rosseland_trilin(Ttest[k], atest[j], qtest[i], kappaR);
-        kappaR_arr[k][j][i] = kappaR;
-        fprintf(kRFile, "%.10e ", kappaR);
-      }
-    }
-  }
-  fclose(kRFile);
+          rosseland_trilin(l, Ttest[k], atest[j], qtest[i], kappaR);
+          kappaR_arr[l][k][j][i] = kappaR;
+          fprintf(kRFile, "%.10e ", kappaR);
 
-  FILE * kSFile;
-  kSFile = fopen("ScatterTest.txt","w+");
-  Real kappaS;
-  Real kappaS_arr[NT][NA][NQ];
-  for(int k=0; k<NT; ++k){
-    for(int j=0; j<NA; ++j){
-      for(int i=0; i<NQ; ++i){
-        scatter_trilin(Ttest[k], atest[j], qtest[i], kappaS);
-        kappaS_arr[k][j][i] = kappaS;
-        fprintf(kSFile, "%.10e ", kappaS);
+          scatter_trilin(l, Ttest[k], atest[j], qtest[i], kappaS);
+          kappaS_arr[l][k][j][i] = kappaS;
+          fprintf(kSFile, "%.10e ", kappaS);
+        }
       }
     }
+    fclose(kPFile);
+    fclose(kRFile);  
+    fclose(kSFile);
   }
-  fclose(kSFile);
-  // throw std::runtime_error("Stop.");
+
+  throw std::runtime_error("Stop.");
 
   //===================================================================================
   // Start Code Unit Definition: Required for dust coagulation and cooling times
@@ -560,7 +634,7 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
         // Calculate temis (optically thin emission timescale) from opacity table
         // =========================================================================
         Tg = SQR(cs*unit_vel)*mue*mp/kB;
-        planck_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+        planck_trilin(0, std::log10(Tg), std::log10(amax), q_d, kappa);
         temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
 
         // =========================================================================
@@ -1080,7 +1154,7 @@ void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx){
   }
 }
 
-void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+void planck_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa){
   // Get indices
   int kT, ja, iq;
   get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
@@ -1135,14 +1209,14 @@ void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &k
   // kP_lll -------- kP_rll
 
   double kP_lll, kP_llr, kP_lrl, kP_lrr, kP_rll, kP_rlr, kP_rrl, kP_rrr;
-  kP_lll = planck_table(kT_l, ja_l, iq_l);
-  kP_llr = planck_table(kT_l, ja_l, iq_r);
-  kP_lrl = planck_table(kT_l, ja_r, iq_l);
-  kP_lrr = planck_table(kT_l, ja_r, iq_r);
-  kP_rll = planck_table(kT_r, ja_l, iq_l);
-  kP_rlr = planck_table(kT_r, ja_l, iq_r);
-  kP_rrl = planck_table(kT_r, ja_r, iq_l);
-  kP_rrr = planck_table(kT_r, ja_r, iq_r);
+  kP_lll = planck_table(ifr, kT_l, ja_l, iq_l);
+  kP_llr = planck_table(ifr, kT_l, ja_l, iq_r);
+  kP_lrl = planck_table(ifr, kT_l, ja_r, iq_l);
+  kP_lrr = planck_table(ifr, kT_l, ja_r, iq_r);
+  kP_rll = planck_table(ifr, kT_r, ja_l, iq_l);
+  kP_rlr = planck_table(ifr, kT_r, ja_l, iq_r);
+  kP_rrl = planck_table(ifr, kT_r, ja_r, iq_l);
+  kP_rrr = planck_table(ifr, kT_r, ja_r, iq_r);
   // printf("Corner values: \n");
   // printf("kP_lll= %.10e , kP_llr= %.10e \n", kP_lll, kP_llr);
   // printf("kP_lrl= %.10e , kP_lrr= %.10e \n", kP_lrl, kP_lrr);
@@ -1174,7 +1248,7 @@ void planck_trilin(const Real T_val, const Real a_val, const Real q_val, Real &k
   kappa = std::pow(10.0,kP);
 }
 
-void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+void scatter_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa){
   // Get indices
   int kT, ja, iq;
   get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
@@ -1229,14 +1303,14 @@ void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &
   // kS_lll -------- kS_rll
 
   double kS_lll, kS_llr, kS_lrl, kS_lrr, kS_rll, kS_rlr, kS_rrl, kS_rrr;
-  kS_lll = scatter_table(kT_l, ja_l, iq_l);
-  kS_llr = scatter_table(kT_l, ja_l, iq_r);
-  kS_lrl = scatter_table(kT_l, ja_r, iq_l);
-  kS_lrr = scatter_table(kT_l, ja_r, iq_r);
-  kS_rll = scatter_table(kT_r, ja_l, iq_l);
-  kS_rlr = scatter_table(kT_r, ja_l, iq_r);
-  kS_rrl = scatter_table(kT_r, ja_r, iq_l);
-  kS_rrr = scatter_table(kT_r, ja_r, iq_r);
+  kS_lll = scatter_table(ifr, kT_l, ja_l, iq_l);
+  kS_llr = scatter_table(ifr, kT_l, ja_l, iq_r);
+  kS_lrl = scatter_table(ifr, kT_l, ja_r, iq_l);
+  kS_lrr = scatter_table(ifr, kT_l, ja_r, iq_r);
+  kS_rll = scatter_table(ifr, kT_r, ja_l, iq_l);
+  kS_rlr = scatter_table(ifr, kT_r, ja_l, iq_r);
+  kS_rrl = scatter_table(ifr, kT_r, ja_r, iq_l);
+  kS_rrr = scatter_table(ifr, kT_r, ja_r, iq_r);
   // printf("Corner values: \n");
   // printf("kS_lll= %.10e , kS_llr= %.10e \n", kS_lll, kS_llr);
   // printf("kS_lrl= %.10e , kS_lrr= %.10e \n", kS_lrl, kS_lrr);
@@ -1268,7 +1342,7 @@ void scatter_trilin(const Real T_val, const Real a_val, const Real q_val, Real &
   kappa = std::pow(10.0,kS);
 }
 
-void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real &kappa){
+void rosseland_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa){
   // Get indices
   int kT, ja, iq;
   get_idx(T_grid(0), T_grid(NUM_T-1), NUM_T, T_val, kT);
@@ -1323,14 +1397,14 @@ void rosseland_trilin(const Real T_val, const Real a_val, const Real q_val, Real
   // kR_lll -------- kR_rll
 
   double kR_lll, kR_llr, kR_lrl, kR_lrr, kR_rll, kR_rlr, kR_rrl, kR_rrr;
-  kR_lll = rosseland_table(kT_l, ja_l, iq_l);
-  kR_llr = rosseland_table(kT_l, ja_l, iq_r);
-  kR_lrl = rosseland_table(kT_l, ja_r, iq_l);
-  kR_lrr = rosseland_table(kT_l, ja_r, iq_r);
-  kR_rll = rosseland_table(kT_r, ja_l, iq_l);
-  kR_rlr = rosseland_table(kT_r, ja_l, iq_r);
-  kR_rrl = rosseland_table(kT_r, ja_r, iq_l);
-  kR_rrr = rosseland_table(kT_r, ja_r, iq_r);
+  kR_lll = rosseland_table(ifr, kT_l, ja_l, iq_l);
+  kR_llr = rosseland_table(ifr, kT_l, ja_l, iq_r);
+  kR_lrl = rosseland_table(ifr, kT_l, ja_r, iq_l);
+  kR_lrr = rosseland_table(ifr, kT_l, ja_r, iq_r);
+  kR_rll = rosseland_table(ifr, kT_r, ja_l, iq_l);
+  kR_rlr = rosseland_table(ifr, kT_r, ja_l, iq_r);
+  kR_rrl = rosseland_table(ifr, kT_r, ja_r, iq_l);
+  kR_rrr = rosseland_table(ifr, kT_r, ja_r, iq_r);
   // printf("Corner values: \n");
   // printf("kR_lll= %.10e , kR_llr= %.10e \n", kR_lll, kR_llr);
   // printf("kR_lrl= %.10e , kR_lrr= %.10e \n", kR_lrl, kR_lrr);
@@ -2100,7 +2174,7 @@ void MeshBlock::UserWorkInLoop() {
           // Calculate temis (optically thin emission timescale) from opacity table
           // =========================================================================
           Tg = SQR(cs*unit_vel)*mue*mp/kB;
-          planck_trilin(std::log10(Tg), std::log10(amax), q_d, kappa);
+          planck_trilin(0, std::log10(Tg), std::log10(amax), q_d, kappa);
           temis = C_dust/(16.*sig_sb*std::pow(Tg,3.)*kappa) / unit_time;
 
           // =========================================================================
