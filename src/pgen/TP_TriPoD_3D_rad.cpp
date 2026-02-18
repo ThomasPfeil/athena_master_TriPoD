@@ -35,6 +35,7 @@
 #include "../orbital_advection/orbital_advection.hpp"
 #include "../parameter_input.hpp"
 #include "../scalars/scalars.hpp"
+#include "../nr_radiation/radiation.hpp"
 // #include "../units/units.hpp"
 
 namespace {
@@ -61,6 +62,12 @@ void get_edges(const int SIZE, const int idx, int &l_idx, int &r_idx);
 void planck_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 void rosseland_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
 void scatter_trilin(const int ifr, const Real T_val, const Real a_val, const Real q_val, Real &kappa);
+void SetFrequencies(NRRadiation *prad);
+void SetFrequencies(NRRadiation *prad);
+int GetMaxErfDnu(const AthenaArray<Real> erf_dnu);
+Real GetColorTemp(const Real nu_peak);
+Real GetNuPeak(const Real temp); 
+int GetFreqGroup(const NRRadiation *prad, const Real nu); 
 
 void MyDustDiffusivity(DustFluids *pdf, MeshBlock *pmb,
       const AthenaArray<Real> &w, const AthenaArray<Real> &prim_df,
@@ -77,18 +84,18 @@ void MySource(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<
 Real MyTimeStep(MeshBlock *pmb);
 
 // problem parameters which are useful to make global to this file
-Real year, au, mp, M_sun, gm0, G, kB, sig_sb, Cp, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, delta_ini, v_frag, alpha_turb, alpha_gas, M_in, R_in, R_out, a_in, r_sm;
+Real year, au, mp, M_sun, gm0, G, kB, h_Planck, sig_sb, Cp, rc, pSig, q, prho, hr_au, hr_r0, gamma_gas, pert, tcool_orb, delta_ini, v_frag, alpha_turb, alpha_gas, M_in, R_in, R_out, a_in, r_sm;
 Real dfloor;
 Real Omega0;
 Real a_min, a_max_ini, q_dust, eps_ini, eps_floor, rho_m, mue;
 Real R_min, R_max, dsize_in, dsize_out, t_damp_in, t_damp_out;
-Real unit_len, unit_vel, unit_rho, unit_time, unit_sig;
+Real unit_len, unit_vel, unit_rho, unit_time, unit_sig, unit_temp;
 Real R_p, Mp_s;
 Real ms, r0, rchar, mdisk, period_ratio;
 Real R_inter, C_in, C_out;
 Real t_damp, th_min, th_max, dsize;
 Real sfac, afac, C_dust;
-int nfreq;
+int nfreq, user_freq;
 bool beta_cool, dust_cool, ther_rel, isotherm, coag, infall, damping, planet, planet_power, Benitez, ind_term, power_law, eps_profile, use_alpha_av;
 
 // Opacity data structures
@@ -100,6 +107,7 @@ static std::string planck_fname;
 static std::string rosseland_fname;
 static std::string scatter_fname;
 static std::string fend;
+static AthenaArray<Real> freq_table;
 static AthenaArray<Real> T_grid;
 static AthenaArray<Real> q_grid;
 static AthenaArray<Real> a_grid;
@@ -153,6 +161,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   year       = 3.154e7; // year in seconds
   G          = 6.67259e-8; // gravitational constant
   kB         = 1.380649e-16; // Boltzmann constant
+  h_Planck   = 6.626196e-27;  // Planck constant [erg s]
   sig_sb     = 5.670374419e-5; // Stefan-Boltzmann constant
 
   ms         = pin->GetReal("problem","ms_in_msol") * M_sun; // stellar mass
@@ -188,7 +197,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   eps_floor  = pin->GetReal("problem","eps_floor");
   C_dust     = pin->GetReal("problem","SpecHeatDust");
 
-  nfreq = pin->GetOrAddInteger("radiation", "n_frequency", 1);
+  nfreq      = pin->GetOrAddInteger("radiation", "n_frequency", 1);
+  user_freq  = pin->GetOrAddInteger("radiation", "frequency_table", 0);
 
   th_min = pin->GetReal("mesh","x2min");
   th_max = pin->GetReal("mesh","x2max");
@@ -197,6 +207,46 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   afac  = 0.4;
   sfac  = 8.0;
+
+  //===================================================================================
+  // Start Code Unit Definition: Required for dust coagulation and cooling times
+  //===================================================================================
+  if(power_law)
+    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar) * pow(au/rchar, pSig) * exp(-pow(au/rchar, 2.+pSig));
+  else 
+    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar);
+
+  if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0){
+    if(power_law)
+      unit_rho = unit_sig*std::pow(r0/au, pSig);
+    else
+      unit_rho = unit_sig;
+  } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
+    if(power_law)
+      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(r0/au, 0.5*(q + 3.0))); 
+    else 
+      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(rchar/au, 0.5*(q + 3.0))); 
+  }
+
+  unit_len  = r0;
+  unit_time = 1./std::sqrt(ms * G / std::pow(unit_len,3.0));
+  unit_vel  = unit_len/unit_time;
+  unit_temp = mue*mp*SQR(unit_vel)/kB;
+  // End Code Unit Definition
+
+  rc         = pin->GetReal("problem","rc_in_au") * au / unit_len;
+  hr_r0      = hr_au * std::pow(unit_len/au, 0.5*(q+1.0));
+  M_in       = pin->GetReal("problem","M_in")*M_sun/year;
+  R_in       = pin->GetReal("problem","R_in")*au;
+  R_out      = pin->GetReal("problem","R_out")*au;
+
+  // Get parameters of initial pressure and cooling parameters
+  gamma_gas = pin->GetReal("hydro","gamma");
+  Cp         = gamma_gas*kB/((gamma_gas-1.)*mue*mp); // using Meyer's relation
+  Real float_min = std::numeric_limits<float>::min();
+  dfloor=pin->GetOrAddReal("hydro","dfloor",(1024*(float_min)));
+
+  Omega0 = pin->GetOrAddReal("orbital_advection","Omega0",0.0);
 
   //=====================================================================================
   // Start Opacity Read-in: Planck opacities for power-law grain size distributions
@@ -394,8 +444,23 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     // printf("T %d %.15e \n", k, T_grid(k));
   }
   fclose(f_T);
-  // End Opacity Read-in 
 
+  //===================================================================================
+  // Read frequency bins
+  //===================================================================================
+  if (user_freq == 1) {
+    FILE *ffreq_table = fopen((opacity_dir + "freq_table.txt").c_str(), "r");
+    freq_table.NewAthenaArray(nfreq-1);
+    for (int i=0; i<nfreq-1; ++i) {
+      fscanf(ffreq_table, "%le", &(freq_table(i)));
+      std::cout << "\tfreq_table(" << i << ") = " << std::scientific << freq_table(i)
+                << " (Hz)" << std::endl;
+      freq_table(i) /= kB*unit_temp/h_Planck;
+      std::cout << "\tfreq_table(" << i << ") = " << std::scientific << freq_table(i)
+          << " (code units)" << std::endl;
+    }
+    fclose(ffreq_table);
+  }
 
   //===================================================================================
   // Opacity Interpolation Test: Interpolate tables on grids, save as file/s
@@ -461,45 +526,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
   throw std::runtime_error("Stop.");
-
-  //===================================================================================
-  // Start Code Unit Definition: Required for dust coagulation and cooling times
-  //===================================================================================
-  if(power_law)
-    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar) * pow(au/rchar, pSig) * exp(-pow(au/rchar, 2.+pSig));
-  else 
-    unit_sig = mdisk*(2.+pSig) / (2.*PI*rchar*rchar);
-
-  if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0){
-    if(power_law)
-      unit_rho = unit_sig*std::pow(r0/au, pSig);
-    else
-      unit_rho = unit_sig;
-  } else if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") == 0){
-    if(power_law)
-      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(r0/au, 0.5*(q + 3.0))); 
-    else 
-      unit_rho = unit_sig / (std::sqrt(2.*PI)*hr_au*au*std::pow(rchar/au, 0.5*(q + 3.0))); 
-  }
-
-  unit_len  = r0;
-  unit_time = 1./std::sqrt(ms * G / std::pow(unit_len,3.0));
-  unit_vel  = unit_len/unit_time;
-  // End Code Unit Definition
-
-  rc         = pin->GetReal("problem","rc_in_au") * au / unit_len;
-  hr_r0      = hr_au * std::pow(unit_len/au, 0.5*(q+1.0));
-  M_in       = pin->GetReal("problem","M_in")*M_sun/year;
-  R_in       = pin->GetReal("problem","R_in")*au;
-  R_out      = pin->GetReal("problem","R_out")*au;
-
-  // Get parameters of initial pressure and cooling parameters
-  gamma_gas = pin->GetReal("hydro","gamma");
-  Cp         = gamma_gas*kB/((gamma_gas-1.)*mue*mp); // using Meyer's relation
-  Real float_min = std::numeric_limits<float>::min();
-  dfloor=pin->GetOrAddReal("hydro","dfloor",(1024*(float_min)));
-
-  Omega0 = pin->GetOrAddReal("orbital_advection","Omega0",0.0);
   
   // Enroll time step function
   EnrollUserTimeStepFunction(MyTimeStep);
@@ -663,6 +689,13 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
       }
     }
   }
+
+  // enroll user-defined opacity function
+  if (NR_RADIATION_ENABLED || IM_RADIATION_ENABLED) {
+    if (user_freq == 1)
+      pnrrad->EnrollFrequencyFunction(SetFrequencies);
+  }
+
 return;
 }
 
@@ -1481,6 +1514,75 @@ void MyStoppingTime(MeshBlock *pmb, const Real time, const AthenaArray<Real> &pr
     }
   }
   return;
+}
+
+//----------------------------------------------------------------------------------------
+//! Sets the frequency grid to the provided frequency table
+void SetFrequencies(NRRadiation *prad) {
+  prad->nu_grid(0) = 0.0;
+
+  for(int i=0; i<nfreq-1; ++i) {
+    prad->nu_grid(i+1) = freq_table(i);
+    prad->nu_cen(i) = (prad->nu_grid(i) + prad->nu_grid(i+1))/2;
+    prad->delta_nu(i) = prad->nu_grid(i+1) - prad->nu_grid(i);
+  }
+}
+
+//========================================================================================
+//! \fn int GetMaxErfDnu(const AthenaArray<Real> erf_dnu)
+//! \brief Returns the index of the finite frequency band with the maximum specific
+//! radiation energy density.
+//========================================================================================
+int GetMaxErfDnu(const AthenaArray<Real> erf_dnu) {
+  int f = 0;
+
+  for(int ifr=1; ifr<nfreq-1; ++ifr) {
+    if (erf_dnu(ifr) > erf_dnu(f))
+      f = ifr;
+  }
+
+  return f;
+}
+
+//========================================================================================
+//! \fn Real GetColorTemp(const Real nu_peak)
+//! \brief Returns the color temperature for the peak of the spectrum, using the Wien
+//! displacement law.
+//========================================================================================
+Real GetColorTemp(const Real nu_peak) {
+  return nu_peak/2.82;
+}
+
+//========================================================================================
+//! \fn Real GetNuPeak(const Real temp)
+//! \brief Returns the frequency of the peak of the Planck law B_nu(temp), using the Wien
+//! displacement law.
+//========================================================================================
+Real GetNuPeak(const Real temp) {
+  return 2.82*temp;
+}
+
+//========================================================================================
+//! \fn int GetFreqGroup(const NRRadiation *prad, const Real nu)
+//! \brief Returns the frequency band that contains the given frequency `nu`.
+//========================================================================================
+int GetFreqGroup(const NRRadiation *prad, const Real nu) {
+  int f;
+  
+  if (nu < prad->nu_grid(1)) {
+    f = 0;
+  } else if (nu > prad->nu_grid(nfreq-1)) {
+    f = nfreq-1;
+  } else {
+    for (int i=1; i<nfreq-1; ++i) {  // USE BinarySearchIncreasing
+      if (nu > prad->nu_grid(i) && nu < prad->nu_grid(i+1)) {
+        f = i;
+        break;
+      }
+    }
+  }
+
+  return f;
 }
 
 Real MyTimeStep(MeshBlock *pmb)
